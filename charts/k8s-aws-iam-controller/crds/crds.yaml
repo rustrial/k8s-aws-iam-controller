@@ -146,6 +146,12 @@ spec:
                 roleArn:
                   description: "AWS IAM Role ARN of the role for which to grant permission. Either a full ARN, am ARN-PATTERN or the wildcard `*` to match all ARNs. - `arn:aws:iam::000000000000:role/path/role-name` - `arn:aws:iam::*:role/path/role-name` - `arn:aws:iam::*:role/path/*` - `*`"
                   type: string
+                roleTags:
+                  additionalProperties:
+                    type: string
+                  description: "Role tags, which must match for the policy to apply."
+                  nullable: true
+                  type: object
               required:
                 - namespaces
                 - roleArn

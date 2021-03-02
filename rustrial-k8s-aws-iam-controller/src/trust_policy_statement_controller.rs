@@ -22,13 +22,14 @@ use rusoto_core::{
     HttpClient, Region, RusotoError,
 };
 use rusoto_iam::{
-    GetRoleError, GetRoleRequest, Iam, IamClient, Role, UpdateAssumeRolePolicyRequest,
+    GetRoleError, GetRoleRequest, Iam, IamClient, ListRoleTagsRequest, Role,
+    UpdateAssumeRolePolicyRequest,
 };
 use rusoto_sts::GetCallerIdentityResponse;
 use rustrial_k8s_aws_iam_apis::{
-    Authorization, Condition, RoleUsagePolicy, TrustPolicyStatement, API_GROUP,
+    Authorization, Condition, RoleUsagePolicy, RoleUsagePolicySpec, TrustPolicyStatement, API_GROUP,
 };
-use std::{convert::TryFrom, ops::DerefMut, time::Instant};
+use std::{collections::HashMap, convert::TryFrom, ops::DerefMut, time::Instant};
 use tokio::time::Duration;
 
 const FINALIZER: &'static str = API_GROUP;
@@ -337,8 +338,19 @@ impl TrustPolicyStatementController {
         match IamRoleRef::try_from(tp.spec.role_arn.as_str()) {
             Ok(role_ref) => match role_ref.resolve(self.provider.clone()).await {
                 Ok(Some(role)) => {
-                    let authorizations =
-                        Self::get_authorizations(&self.useage_policy_cache, &tp, &role);
+                    let authorizations = match self.get_authorizations(&tp, &role).await {
+                        Ok(a) => a,
+                        Err(e) => {
+                            tp.set_status(Some(format!("{}", e)));
+                            error!(
+                                "Error while analysing authorization for {}/{}: {}",
+                                namespace,
+                                tp.name(),
+                                e
+                            );
+                            vec![]
+                        }
+                    };
                     if authorizations.len() > 0 {
                         tp.set_authorizations(Some(authorizations));
                         // add finalizer and default values on spec
@@ -437,7 +449,28 @@ impl TrustPolicyStatementController {
         }
     }
 
-    fn arn_like(pattern: &str, arn: &str) -> bool {
+    async fn get_role_tags(&self, role: &Role) -> anyhow::Result<HashMap<String, String>> {
+        let client =
+            IamClient::new_with(HttpClient::new()?, self.provider.clone(), Region::UsEast1);
+        let mut all_tags = HashMap::new();
+        let mut lp = ListRoleTagsRequest {
+            role_name: role.role_name.clone(),
+            ..Default::default()
+        };
+        loop {
+            let tags = client.list_role_tags(lp.clone()).await?;
+            lp.marker = tags.marker;
+            for tag in tags.tags {
+                all_tags.insert(tag.key, tag.value);
+            }
+            if lp.marker.is_none() {
+                break;
+            }
+        }
+        Ok(all_tags)
+    }
+
+    pub(crate) fn arn_like(pattern: &str, arn: &str) -> bool {
         let pa = ARN::try_from(pattern);
         let a = ARN::try_from(arn);
         if let (Ok(arn_pattern), Ok(arn)) = (pa, a) {
@@ -447,51 +480,83 @@ impl TrustPolicyStatementController {
         }
     }
 
-    fn get_authorizations(
-        store: &Store<RoleUsagePolicy>,
+    pub(crate) fn tags_match(
+        required_tags: &HashMap<String, String>,
+        available_tags: &HashMap<String, String>,
+    ) -> bool {
+        for (key, value) in required_tags {
+            if available_tags.get(key) != Some(value) {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub(crate) fn matches(
+        policy: &RoleUsagePolicySpec,
+        namespace: &str,
+        role_arn: &str,
+        permission_boundary: Option<String>,
+        available_tags: &HashMap<String, String>,
+    ) -> bool {
+        let ns = policy
+            .namespaces
+            .iter()
+            .filter(|ns| ns.as_str() == "*" || ns.as_str() == namespace)
+            .count()
+            > 0;
+        if ns {
+            let role_arn_matches = Self::arn_like(policy.role_arn.as_str(), role_arn);
+            let tags_match = match policy.role_tags.as_ref().filter(|v| !v.is_empty()) {
+                Some(required_tags) => Self::tags_match(required_tags, &available_tags),
+                // if no tags are provided, they match
+                None => true,
+            };
+            let permission_boundary_matches = match (
+                &policy.permission_boundary.as_deref(),
+                permission_boundary.as_deref(),
+            ) {
+                (Some(pattern), Some(arn)) if !pattern.is_empty() => Self::arn_like(pattern, arn),
+                (Some(pattern), None) if !pattern.is_empty() => false,
+                // match all permission boundaries (including empty one) if spec.permission_boundary is
+                // not set.
+                _ => true,
+            };
+            role_arn_matches && tags_match && permission_boundary_matches
+        } else {
+            false
+        }
+    }
+
+    async fn get_authorizations(
+        &self,
         tp: &TrustPolicyStatement,
         role: &Role,
-    ) -> Vec<Authorization> {
-        let cache = store.state();
-        cache
+    ) -> anyhow::Result<Vec<Authorization>> {
+        let namespace = tp.namespace().unwrap_or_else(|| "".to_string());
+        let cache = self.useage_policy_cache.state();
+        let available_tags = self.get_role_tags(role).await?;
+        let authorizations = cache
             .iter()
             .filter(|p: &&RoleUsagePolicy| {
-                let ns = p
-                    .spec
-                    .namespaces
-                    .iter()
-                    .filter(|ns| {
-                        ns.as_str() == "*" || Some(ns.as_str()) == tp.namespace().as_deref()
-                    })
-                    .count()
-                    > 0;
-                if ns {
-                    Self::arn_like(p.spec.role_arn.as_str(), role.arn.as_str())
-                        && match &p.spec.permission_boundary {
-                            Some(boundary_arn) if !boundary_arn.is_empty() => role
-                                .permissions_boundary
-                                .as_ref()
-                                .map(|v| {
-                                    v.permissions_boundary_arn
-                                        .as_ref()
-                                        .filter(|v| Self::arn_like(boundary_arn, v.as_str()))
-                                        .is_some()
-                                })
-                                .is_some(),
-                            // match all permission boundaries (including empty one) if spec.permission_boundary is
-                            // not set.
-                            _ => true,
-                        }
-                } else {
-                    false
-                }
+                Self::matches(
+                    &p.spec,
+                    namespace.as_str(),
+                    role.arn.as_str(),
+                    role.permissions_boundary
+                        .as_ref()
+                        .map(|v| v.permissions_boundary_arn.clone())
+                        .flatten(),
+                    &available_tags,
+                )
             })
             .map(|v| Authorization {
                 kind: v.kind.clone(),
                 name: v.name(),
                 namespace: v.namespace(),
             })
-            .collect()
+            .collect();
+        Ok(authorizations)
     }
 
     async fn prepare(&self, tp: &mut ReconcileEvent) -> anyhow::Result<()> {
@@ -652,5 +717,233 @@ impl TrustPolicyStatementController {
                 }
             });
         controller
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches() {
+        let policy = RoleUsagePolicySpec {
+            role_arn: "xx".to_string(),
+            role_tags: None,
+            permission_boundary: None,
+            namespaces: vec!["aa".to_string()],
+        };
+        assert!(TrustPolicyStatementController::matches(
+            &policy,
+            "aa",
+            "xx",
+            None,
+            &HashMap::new()
+        ));
+        let policy = RoleUsagePolicySpec {
+            role_arn: "*".to_string(),
+            role_tags: None,
+            permission_boundary: None,
+            namespaces: vec!["aa".to_string()],
+        };
+        assert!(TrustPolicyStatementController::matches(
+            &policy,
+            "aa",
+            "xx",
+            None,
+            &HashMap::new()
+        ));
+    }
+
+    #[test]
+    fn matches_permission_boundary() {
+        let full = "arn:aws:iam::000000000000:policy/name";
+        let policy = RoleUsagePolicySpec {
+            role_arn: "*".to_string(),
+            role_tags: None,
+            permission_boundary: Some(full.to_string()),
+            namespaces: vec!["*".to_string()],
+        };
+        assert!(TrustPolicyStatementController::matches(
+            &policy,
+            "aa",
+            "xx",
+            Some(full.to_string()),
+            &HashMap::new()
+        ));
+        let policy = RoleUsagePolicySpec {
+            role_arn: "*".to_string(),
+            role_tags: None,
+            permission_boundary: Some("arn:aws:iam::*:policy/name".to_string()),
+            namespaces: vec!["*".to_string()],
+        };
+        assert!(TrustPolicyStatementController::matches(
+            &policy,
+            "aa",
+            "xx",
+            Some(full.to_string()),
+            &HashMap::new()
+        ));
+        let policy = RoleUsagePolicySpec {
+            role_arn: "*".to_string(),
+            role_tags: None,
+            permission_boundary: Some("arn:aws:iam::*:policy/*".to_string()),
+            namespaces: vec!["*".to_string()],
+        };
+        assert!(TrustPolicyStatementController::matches(
+            &policy,
+            "aa",
+            "xx",
+            Some(full.to_string()),
+            &HashMap::new()
+        ));
+    }
+
+    #[test]
+    fn refuses_permission_boundary() {
+        let policy = RoleUsagePolicySpec {
+            role_arn: "*".to_string(),
+            role_tags: None,
+            permission_boundary: Some("arn:aws:iam::*:policy/name".to_string()),
+            namespaces: vec!["aa".to_string()],
+        };
+        assert!(!TrustPolicyStatementController::matches(
+            &policy,
+            "aa",
+            "xx",
+            None,
+            &HashMap::new()
+        ));
+        assert!(!TrustPolicyStatementController::matches(
+            &policy,
+            "aa",
+            "xx",
+            Some("arn:aws:iam::00000000000000:policy/other-name".to_string()),
+            &HashMap::new()
+        ));
+    }
+
+    #[test]
+    fn matches_namespace() {
+        let policy = RoleUsagePolicySpec {
+            role_arn: "*".to_string(),
+            role_tags: None,
+            permission_boundary: None,
+            namespaces: vec!["aa".to_string(), "bb".to_string()],
+        };
+        assert!(TrustPolicyStatementController::matches(
+            &policy,
+            "bb",
+            "xx",
+            None,
+            &HashMap::new()
+        ));
+    }
+
+    #[test]
+    fn matches_namespace_wildcard() {
+        let policy = RoleUsagePolicySpec {
+            role_arn: "*".to_string(),
+            role_tags: None,
+            permission_boundary: None,
+            namespaces: vec!["*".to_string()],
+        };
+        assert!(TrustPolicyStatementController::matches(
+            &policy,
+            "bb",
+            "xx",
+            None,
+            &HashMap::new()
+        ));
+    }
+
+    #[test]
+    fn refuses_namespace() {
+        let policy = RoleUsagePolicySpec {
+            role_arn: "*".to_string(),
+            role_tags: None,
+            permission_boundary: Some("arn:aws:iam::*:policy/name".to_string()),
+            namespaces: vec!["aa".to_string()],
+        };
+        assert!(!TrustPolicyStatementController::matches(
+            &policy,
+            "bb",
+            "xx",
+            None,
+            &HashMap::new()
+        ));
+    }
+
+    #[test]
+    fn refuses() {
+        let policy = RoleUsagePolicySpec {
+            role_arn: "xx".to_string(),
+            role_tags: None,
+            permission_boundary: None,
+            namespaces: vec!["aa".to_string()],
+        };
+        assert!(!TrustPolicyStatementController::matches(
+            &policy,
+            "aa",
+            "yy",
+            None,
+            &HashMap::new()
+        ));
+    }
+
+    #[test]
+    fn matches_role_tags_empty() {
+        let required = HashMap::new();
+        let available = HashMap::new();
+        assert!(TrustPolicyStatementController::tags_match(
+            &required, &available
+        ));
+    }
+
+    #[test]
+    fn matches_role_tags_superset() {
+        let mut required = HashMap::new();
+        required.insert("a".to_string(), "v1".to_string());
+        required.insert("b".to_string(), "v2".to_string());
+        let mut available = HashMap::new();
+        available.insert("a".to_string(), "v1".to_string());
+        available.insert("b".to_string(), "v2".to_string());
+        available.insert("c".to_string(), "v3".to_string());
+        assert!(TrustPolicyStatementController::tags_match(
+            &required, &available
+        ));
+    }
+
+    #[test]
+    fn refuse_role_tags_empty() {
+        let mut required = HashMap::new();
+        required.insert("a".to_string(), "v1".to_string());
+        required.insert("b".to_string(), "v2".to_string());
+        let available = HashMap::new();
+        assert!(!TrustPolicyStatementController::tags_match(
+            &required, &available
+        ));
+    }
+
+    #[test]
+    fn refuse_role_tags_subset() {
+        let mut required = HashMap::new();
+        required.insert("a".to_string(), "v1".to_string());
+        required.insert("b".to_string(), "v2".to_string());
+        let mut available = HashMap::new();
+        available.insert("a".to_string(), "v1".to_string());
+        assert!(!TrustPolicyStatementController::tags_match(
+            &required, &available
+        ));
+    }
+
+    #[test]
+    fn refuse_role_tags_different_value() {
+        let mut required = HashMap::new();
+        required.insert("a".to_string(), "v1".to_string());
+        let mut available = HashMap::new();
+        available.insert("a".to_string(), "v2".to_string());
+        assert!(!TrustPolicyStatementController::tags_match(
+            &required, &available
+        ));
     }
 }

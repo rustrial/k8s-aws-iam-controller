@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use k8s_openapi::chrono::{SecondsFormat, Utc};
 use kube::CustomResource;
 
@@ -62,6 +64,10 @@ pub struct RoleUsagePolicySpec {
     /// ARN or ARN-Pattern of the AWS PermissionBoundary Policy.
     #[serde(rename = "permissionBoundary", skip_serializing_if = "Option::is_none")]
     pub permission_boundary: Option<String>,
+
+    /// Role tags, which must match for the policy to apply.
+    #[serde(rename = "roleTags", skip_serializing_if = "Option::is_none")]
+    pub role_tags: Option<HashMap<String, String>>,
 
     /// Set of Kubernetes namespaces, which are authorized to use that AWS IAM    
     /// Role. Can contain `*` to authorize all namespaces.
@@ -193,6 +199,7 @@ mod tests {
     fn it_works() {
         let p = RoleUsagePolicySpec {
             role_arn: "xx".to_string(),
+            role_tags: None,
             permission_boundary: None,
             namespaces: vec!["aa".to_string()],
         };

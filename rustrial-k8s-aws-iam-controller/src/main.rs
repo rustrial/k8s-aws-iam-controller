@@ -104,7 +104,8 @@ async fn get_aws_provider() -> anyhow::Result<AutoRefreshingProvider<AwsCredenti
                     "Action": [
                         "iam:GetRole",
                         "iam:ListRoles",
-                        "iam:ListOpenIDConnectProviders"
+                        "iam:ListOpenIDConnectProviders",
+                        "iam:ListRoleTags"
                     ],
                     "Resource": "*"
                 },

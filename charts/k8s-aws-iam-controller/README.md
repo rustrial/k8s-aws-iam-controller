@@ -32,7 +32,8 @@ with the following permissions. Of course, you can adapt the `Resource` or `Cond
       "Action": [
         "iam:GetRole",
         "iam:ListRoles",
-        "iam:ListOpenIDConnectProviders"
+        "iam:ListOpenIDConnectProviders",
+        "iam:ListRoleTags"
       ],
       "Resource": "*"
     },
