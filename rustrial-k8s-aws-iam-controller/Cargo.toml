@@ -1,0 +1,37 @@
+[package]
+name = "rustrial-k8s-aws-iam-controller"
+version = "0.1.0"
+authors = ["lex.berger@gmail.com <lex.berger@gmail.com>"]
+edition = "2018"
+license = "Unlicense OR MIT OR Apache-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+
+[dependencies]
+log = "0.4.11"
+env_logger ="^0.8.2"
+anyhow = {version = "1.0.37", features = ["std"]}
+thiserror = "1.0.23"
+tokio = { version = "^1.0.1", features = ["full"]}
+serde_yaml = "^0.8.14"
+futures = "0.3.9"
+metrics = "0.14.2"
+metrics-exporter-prometheus = "0.3.0"
+kube = { version = "0.51.0", features = ["derive", "jsonpatch"]}
+json-patch = "0.2.6"
+kube-runtime = "0.51.0"
+schemars = "^0.8.0"
+k8s-openapi = { version = "0.11.0", default-features = false, features = ["v1_20"] }
+semver = { version = "0.11.0", features = ["serde"] }
+serde = { version = "1.0.123", features = ["derive"] }
+serde_json = "1.0.62"
+rustrial-k8s-aws-iam-apis = { path = "../rustrial-k8s-aws-iam-apis"}
+rusoto_core = "0.46.0"
+rusoto_iam = "0.46.0"
+rusoto_sts = "0.46.0"
+sha2 = "0.9.3"
+regex = "1.4.3"
+lazy_static = "1.4.0"
+async-trait = "0.1.42"
+indoc = "1.0"
