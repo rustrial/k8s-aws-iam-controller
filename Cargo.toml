@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "rustrial-k8s-aws-iam-apis",
+    "rustrial-k8s-aws-iam-controller",
+]

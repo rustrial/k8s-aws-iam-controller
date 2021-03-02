@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "k8s-aws-iam-controller.fullname" . }}
+  labels:
+    {{- include "k8s-aws-iam-controller.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "k8s-aws-iam-controller.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '9000'
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "k8s-aws-iam-controller.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "k8s-aws-iam-controller.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          env:
+            - name: RUST_LOG
+              value: "{{ .Values.logLevel | default "info" }}"
+            - name: TRUST_POLICY_STATEMENT_GC_INTERVAL_SECONDS
+              value: "{{ .Values.trustPolicyStatementGcInterval | default "3600" }}"
+          {{- if .Values.disableTrustPolicyStatementGc }}
+            - name: DISABLE_TRUST_POLICY_STATEMENT_GC
+              value: "{{ .Values.disableTrustPolicyStatementGc }}"
+          {{- end }}
+          {{- if .Values.watchNamespace }}
+            - name: WATCH_NAMESPACE
+              value: "{{ .Values.watchNamespace }}"
+          {{- end }}
+          {{- if .Values.storageNamespace }}
+            - name: STORAGE_NAMESPACE
+              value: "{{ .Values.storageNamespace }}"
+          {{- end }}
+          {{- if .Values.oidcProviderArn }}
+            - name: OIDC_PROVIDER_ARN
+              value: "{{ .Values.oidcProviderArn }}"
+          {{- end }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
