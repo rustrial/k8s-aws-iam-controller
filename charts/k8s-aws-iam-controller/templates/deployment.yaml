@@ -11,10 +11,10 @@ spec:
       {{- include "k8s-aws-iam-controller.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
         prometheus.io/scrape: 'true'
         prometheus.io/port: '9000'
+      {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
@@ -52,6 +52,15 @@ spec:
           {{- if .Values.oidcProviderArn }}
             - name: OIDC_PROVIDER_ARN
               value: "{{ .Values.oidcProviderArn }}"
+          {{- end }}
+          {{- if .Values.awsRegion }}
+            - name: AWS_REGION
+              value: "{{ .Values.awsRegion }}"
+            - name: AWS_DEFAULT_REGION
+              value: "{{ .Values.awsRegion }}"
+          {{- end }}
+          {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
           {{- end }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:

@@ -4,6 +4,7 @@
 | -------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------- | --------- |
 | `awsIamRole`                     | ARN of the AWS IAM Role of the controller                                      |                                               | yes       |
 | `oidcProviderArn`                | Space separated list of ARNs of the AWS EKS Cluster's OpenID Connect Providers |                                               | no(\*)    |
+| `awsRegion`                      | AWS Region                                                                     |                                               | no        |
 | `watchNamespace`                 | Namespace to watch for `ServiceAccount` and `TrustPolicyStatement` objects.    | `null` (watch all namespaces)                 | no        |
 | `storageNamespace`               | Namespace to watch for `RoleUsagePolicy` objects.                              | `null` (watch controller's current namespace) | no        |
 | `logLevel`                       | Log level on of `error`, `info`, `debug` or `trace`                            | `info`                                        | no        |
@@ -96,4 +97,5 @@ helm install my-k8s-aws-iam-controller k8s-aws-iam-controller/k8s-aws-iam-contro
      --version 0.1.0 \
      --set awsIamRole=arn:aws:iam::000000000000:role/k8s-aws-iam-controller \
      --set oidcProviderArn=arn:aws:iam::000000000000:oidc-provider/oidc.eks.eu-central-1.amazonaws.com/id/XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+     --set awsRegion=eu-central-1
 ```

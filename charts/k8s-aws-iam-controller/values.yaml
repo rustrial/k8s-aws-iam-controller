@@ -25,6 +25,8 @@ serviceAccount:
 
 awsIamRole: ""
 
+awsRegion: ""
+
 disableTrustPolicyStatementGc: false
 
 trustPolicyStatementGcInterval: "3600"
@@ -66,3 +68,5 @@ watchNamespace: null
 
 # The namespace to watch for RoleUsagePolicy, if omitted watch the namespace of the controller.
 storageNamespace: null
+
+extraEnv: []
