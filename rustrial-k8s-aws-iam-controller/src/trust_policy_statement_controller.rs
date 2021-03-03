@@ -113,16 +113,23 @@ impl IamRoleRef {
             .assume_role_policy_document
             .as_deref()
             .unwrap_or(EMPTY_ASSUME_ROLE_POLICY);
-        let mut policy_document: PolicyDocument = serde_json::from_str(policy)?;
+        let original: PolicyDocument = serde_json::from_str(policy)?;
+        let mut policy_document = original.clone();
         patcher(&mut policy_document.statement)?;
-        let client = IamClient::new_with(HttpClient::new()?, provider, Region::UsEast1);
-        let policy_document = serde_json::to_string(&policy_document)?;
-        client
-            .update_assume_role_policy(UpdateAssumeRolePolicyRequest {
-                role_name: role.role_name.clone(),
-                policy_document,
-            })
-            .await?;
+        if original != policy_document {
+            let client = IamClient::new_with(HttpClient::new()?, provider, Region::UsEast1);
+            let policy_document = serde_json::to_string(&policy_document)?;
+            info!(
+                "Update TrustPolicy on IAM Role {}\nOld: {}\n New: {}",
+                role.arn, policy, policy_document
+            );
+            client
+                .update_assume_role_policy(UpdateAssumeRolePolicyRequest {
+                    role_name: role.role_name.clone(),
+                    policy_document,
+                })
+                .await?;
+        }
         Ok(())
     }
 
