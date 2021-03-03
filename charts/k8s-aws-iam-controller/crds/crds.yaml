@@ -24,23 +24,31 @@ spec:
           properties:
             spec:
               properties:
-                providerArn:
-                  description: AWS IAM OpenID Connect Provider ARN
-                  type: string
+                providers:
+                  description: "AWS EKS Cluster's OpenID Connect Providers, at least one entry is required."
+                  items:
+                    properties:
+                      providerArn:
+                        description: AWS IAM OpenID Connect Provider ARN of EKS Cluster OIDC Provider.
+                        type: string
+                      statementSid:
+                        description: "Trust Policy Statement ID (SID), must be unique."
+                        type: string
+                    required:
+                      - providerArn
+                      - statementSid
+                    type: object
+                  type: array
                 roleArn:
                   description: AWS IAM Role ARN this statement is applied to.
                   type: string
                 serviceAccountName:
                   description: ServiceAccount name for which this statement was created.
                   type: string
-                statementSid:
-                  description: Trust Policy Statement ID (SID).
-                  type: string
               required:
-                - providerArn
+                - providers
                 - roleArn
                 - serviceAccountName
-                - statementSid
               type: object
             status:
               nullable: true
@@ -94,6 +102,22 @@ spec:
                       - reason
                       - status
                       - type
+                    type: object
+                  nullable: true
+                  type: array
+                providers:
+                  description: "AWS EKS Cluster's OpenID Connect Providers last applied to IAM Role. This information is used to remove stale providers from IAM Role if the spec.providers field changes."
+                  items:
+                    properties:
+                      providerArn:
+                        description: AWS IAM OpenID Connect Provider ARN of EKS Cluster OIDC Provider.
+                        type: string
+                      statementSid:
+                        description: "Trust Policy Statement ID (SID), must be unique."
+                        type: string
+                    required:
+                      - providerArn
+                      - statementSid
                     type: object
                   nullable: true
                   type: array

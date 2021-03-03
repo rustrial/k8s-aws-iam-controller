@@ -63,6 +63,22 @@ pub enum PrincipalKind {
     All,
 }
 
+impl IntoIterator for PrincipalKind {
+    type Item = String;
+
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        match self {
+            PrincipalKind::AWS(v) => v.into_iter(),
+            PrincipalKind::Federated(v) => v.into_iter(),
+            PrincipalKind::Service(v) => v.into_iter(),
+            PrincipalKind::CanonicalUser(v) => v.into_iter(),
+            PrincipalKind::All => vec!["*".to_string()].into_iter(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum Principal {
@@ -760,7 +776,7 @@ mod tests {
                         {
                         "Effect": "Allow",
                         "Principal": {
-                            "Federated": "arn:aws:iam::531625857322:oidc-provider/oidc.eks.eu-central-1.amazonaws.com/id/F9C16C0A32FC4A6972962AA8025418C7"
+                            "Federated": "arn:aws:iam::000000000000:oidc-provider/oidc.eks.eu-central-1.amazonaws.com/id/F9C16C0A32FC4A6972962AA8025418C7"
                         },
                         "Action": "sts:AssumeRoleWithWebIdentity",
                         "Condition": {
@@ -779,24 +795,4 @@ mod tests {
         //assert_eq!(document, PolicyDocument::default());
         Ok(())
     }
-
-    /*
-        {
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Effect": "Allow",
-          "Principal": {
-            "Federated": "arn:aws:iam::531625857322:oidc-provider/oidc.eks.eu-central-1.amazonaws.com/id/F9C16C0A32FC4A6972962AA8025418C7"
-          },
-          "Action": "sts:AssumeRoleWithWebIdentity",
-          "Condition": {
-            "StringEquals": {
-              "oidc.eks.eu-central-1.amazonaws.com/id/F9C16C0A32FC4A6972962AA8025418C7:sub": "system:serviceaccount:kube-system:cluster-autoscaler"
-            }
-          }
-        }
-      ]
-    }
-        */
 }

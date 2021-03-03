@@ -78,6 +78,16 @@ pub struct RoleUsagePolicySpec {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
 pub struct RoleUsagePolicyStatus {}
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
+pub struct Provider {
+    /// AWS IAM OpenID Connect Provider ARN of EKS Cluster OIDC Provider.
+    #[serde(rename = "providerArn")]
+    pub provider_arn: String,
+    /// Trust Policy Statement ID (SID), must be unique.
+    #[serde(rename = "statementSid")]
+    pub statement_sid: String,
+}
+
 #[derive(CustomResource, Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 #[kube(
     group = "iam.aws.rustrial.org",
@@ -100,12 +110,9 @@ pub struct TrustPolicyStatementSpec {
     /// AWS IAM Role ARN this statement is applied to.
     #[serde(rename = "roleArn")]
     pub role_arn: String,
-    /// AWS IAM OpenID Connect Provider ARN
-    #[serde(rename = "providerArn")]
-    pub provider_arn: String,
-    /// Trust Policy Statement ID (SID).
-    #[serde(rename = "statementSid")]
-    pub statement_sid: String,
+    /// AWS EKS Cluster's OpenID Connect Providers, at least one entry is required.
+    #[serde(rename = "providers")]
+    pub providers: Vec<Provider>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
@@ -121,11 +128,19 @@ pub struct Authorization {
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
 pub struct TrustPolicyStatementStatus {
+    /// AWS EKS Cluster's OpenID Connect Providers last applied to IAM Role.
+    /// This information is used to remove stale providers from IAM Role if
+    /// the spec.providers field changes.
+    #[serde(rename = "providers")]
+    pub providers: Option<Vec<Provider>>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conditions: Option<Vec<Condition>>,
+
     /// The authorization sources which authorize the use of this trust policy statement.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorizations: Option<Vec<Authorization>>,
+
     /// Status text
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
@@ -134,6 +149,7 @@ pub struct TrustPolicyStatementStatus {
 impl Default for TrustPolicyStatementStatus {
     fn default() -> Self {
         Self {
+            providers: None,
             conditions: None,
             authorizations: None,
             status: None,
@@ -142,6 +158,15 @@ impl Default for TrustPolicyStatementStatus {
 }
 
 impl TrustPolicyStatement {
+    pub fn set_providers(&mut self, providers: Option<Vec<Provider>>) {
+        let mut status = self
+            .status
+            .take()
+            .unwrap_or_else(|| TrustPolicyStatementStatus::default());
+        status.providers = providers;
+        self.status = Some(status);
+    }
+
     pub fn set_status(&mut self, text: Option<String>) {
         let mut status = self
             .status

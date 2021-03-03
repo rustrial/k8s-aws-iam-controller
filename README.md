@@ -116,11 +116,12 @@ metadata:
       name: cluster-autoscaler
       uid: 109070af-b481-42f2-8dbe-c8f8d1221fea
 spec:
-  providerArn: >-
-    arn:aws:iam::000000000000:oidc-provider/oidc.eks.eu-central-1.amazonaws.com/id/F9C16C0A32FC4A6972962AA8025418C7
+  providers:
+    - providerArn: >-
+        arn:aws:iam::000000000000:oidc-provider/oidc.eks.eu-central-1.amazonaws.com/id/F9C16C0A32FC4A6972962AA8025418C7
+      statementSid: EKSeb7a1df89825c0d695a3f40d5d8749fc04b0011990ea23d758a7ae7f5cee08ddX
   roleArn: "arn:aws:iam::000000000000:role/cluster-autoscaler-role"
   serviceAccountName: cluster-autoscaler
-  statementSid: EKSeb7a1df89825c0d695a3f40d5d8749fc04b0011990ea23d758a7ae7f5cee08ddX
 status:
   authorizations:
     - kind: RoleUsagePolicy

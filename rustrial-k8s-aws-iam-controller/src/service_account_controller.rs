@@ -16,7 +16,8 @@ use kube_runtime::{
 use log::info;
 use metrics::{counter, histogram};
 use rustrial_k8s_aws_iam_apis::{
-    TrustPolicyStatement, TrustPolicyStatementSpec, API_VERSION, TRUST_POLICY_STATEMENT_LABEL,
+    Provider, TrustPolicyStatement, TrustPolicyStatementSpec, API_VERSION,
+    TRUST_POLICY_STATEMENT_LABEL,
 };
 use sha2::Digest;
 use std::time::Instant;
@@ -28,7 +29,7 @@ const ROLE_ANNOTATION: &'static str = "eks.amazonaws.com/role-arn";
 /// that are annotated with an AWS IAM Role.
 pub(crate) struct ServiceAccountController {
     pub configuration: Configuration,
-    pub oidc_provider_arn: String,
+    pub oidc_provider_arn: Vec<String>,
 }
 
 impl ServiceAccountController {
@@ -81,22 +82,27 @@ impl ServiceAccountController {
             Api::<TrustPolicyStatement>::all(self.configuration.client.clone())
         };
 
-        // Generate unique, deterministic SID by hashing provider, namespace and name.
-        let mut digester = sha2::Sha256::new();
-        digester.update(self.oidc_provider_arn.as_bytes());
-        digester.update(b":");
-        digester.update(sa.namespace().as_deref().unwrap_or("").as_bytes());
-        digester.update(b":");
-        digester.update(sa.name().as_bytes());
-        let digest = digester.finalize();
-        // Make sure SID starts and ends with non-numeric characters.
-        let statement_sid = format!("EKS{:x}X", digest);
-
+        let mut providers = vec![];
+        for provider_arn in &self.oidc_provider_arn {
+            // Generate unique, deterministic SID by hashing provider, namespace and name.
+            let mut digester = sha2::Sha256::new();
+            digester.update(provider_arn.as_bytes());
+            digester.update(b":");
+            digester.update(sa.namespace().as_deref().unwrap_or("").as_bytes());
+            digester.update(b":");
+            digester.update(sa.name().as_bytes());
+            let digest = digester.finalize();
+            // Make sure SID starts and ends with non-numeric characters.
+            let statement_sid = format!("EKS{:x}X", digest);
+            providers.push(Provider {
+                provider_arn: provider_arn.clone(),
+                statement_sid,
+            });
+        }
         let spec = TrustPolicyStatementSpec {
             service_account_name: sa.name(),
             role_arn: role_arn.to_string(),
-            provider_arn: self.oidc_provider_arn.clone(),
-            statement_sid,
+            providers,
         };
         let tp: anyhow::Result<TrustPolicyStatement> = match api.get(sa.name().as_str()).await {
             Err(Error::Api(e)) if e.code == 404 || e.code == 409 => Ok(TrustPolicyStatement {

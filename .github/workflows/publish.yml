@@ -73,7 +73,9 @@ jobs:
         with:
           node_image: kindest/node:${{ matrix.k8s }}
       - name: Install chart
-        run: (cd charts/k8s-aws-iam-controller && helm install k8s-aws-iam-controller . -n kube-system --create-namespace --wait --set fullnameOverride=k8s-aws-iam-controller --set-string image.tag=${{ steps.docker-tag.outputs.tag }})
+        # No --wait, we do not wait for the Deployment to become ready, as it will not become
+        # ready without valid AWS credentials.
+        run: (cd charts/k8s-aws-iam-controller && helm install k8s-aws-iam-controller . -n kube-system --create-namespace --set fullnameOverride=k8s-aws-iam-controller --set-string image.tag=${{ steps.docker-tag.outputs.tag }})
       - name: Tests
         run: ./.github/e2e-tests.sh
   create-release:

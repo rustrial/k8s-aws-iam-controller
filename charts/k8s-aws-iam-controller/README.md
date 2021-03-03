@@ -1,14 +1,14 @@
 # Helm Chart Values
 
-| Parameter                        | Description                                                                 | Default Value                                 | Mandatory |
-| -------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------- | --------- |
-| `awsIamRole`                     | ARN of the AWS IAM Role of the controller                                   |                                               | yes       |
-| `oidcProviderArn`                | ARN of the AWS EKS Cluster's OpenID Connect Provider                        |                                               | no(\*)    |
-| `watchNamespace`                 | Namespace to watch for `ServiceAccount` and `TrustPolicyStatement` objects. | `null` (watch all namespaces)                 | no        |
-| `storageNamespace`               | Namespace to watch for `RoleUsagePolicy` objects.                           | `null` (watch controller's current namespace) | no        |
-| `logLevel`                       | Log level on of `error`, `info`, `debug` or `trace`                         | `info`                                        | no        |
-| `disableTrustPolicyStatementGc`  | Disable Trust Policy Statement garbage collector (GC)                       | `false` (GC is enabled by default)            | no        |
-| `trustPolicyStatementGcInterval` | Disable Trust Policy Statement GC intervall in seconds                      | `3600` (once per hour)                        | no        |
+| Parameter                        | Description                                                                    | Default Value                                 | Mandatory |
+| -------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------- | --------- |
+| `awsIamRole`                     | ARN of the AWS IAM Role of the controller                                      |                                               | yes       |
+| `oidcProviderArn`                | Space separated list of ARNs of the AWS EKS Cluster's OpenID Connect Providers |                                               | no(\*)    |
+| `watchNamespace`                 | Namespace to watch for `ServiceAccount` and `TrustPolicyStatement` objects.    | `null` (watch all namespaces)                 | no        |
+| `storageNamespace`               | Namespace to watch for `RoleUsagePolicy` objects.                              | `null` (watch controller's current namespace) | no        |
+| `logLevel`                       | Log level on of `error`, `info`, `debug` or `trace`                            | `info`                                        | no        |
+| `disableTrustPolicyStatementGc`  | Disable Trust Policy Statement garbage collector (GC)                          | `false` (GC is enabled by default)            | no        |
+| `trustPolicyStatementGcInterval` | Disable Trust Policy Statement GC intervall in seconds                         | `3600` (once per hour)                        | no        |
 
 (\*) If `oidcProviderArn` is not provided the ServiceAccount-Controller will be turned-off
 and only the TrustPolicyStatement-Controller will be active. As a consequence,
@@ -92,5 +92,8 @@ helm repo add k8s-aws-iam-controller https://rustrial.github.io/k8s-aws-iam-cont
 **Install Helm Chart**
 
 ```shell
-helm install my-k8s-aws-iam-controller k8s-aws-iam-controller/k8s-aws-iam-controller --version 0.1.0 --set awsIamRole=arn:aws:iam::000000000000:role/k8s-aws-iam-controller
+helm install my-k8s-aws-iam-controller k8s-aws-iam-controller/k8s-aws-iam-controller \
+     --version 0.1.0 \
+     --set awsIamRole=arn:aws:iam::000000000000:role/k8s-aws-iam-controller \
+     --set oidcProviderArn=arn:aws:iam::000000000000:oidc-provider/oidc.eks.eu-central-1.amazonaws.com/id/XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 ```

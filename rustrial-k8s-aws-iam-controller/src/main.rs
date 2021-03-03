@@ -183,7 +183,9 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     info!("Controller is running with AWS Identity {:?}", whoami);
-    let oidc_provider_arn = env_var("OIDC_PROVIDER_ARN");
+    let oidc_provider_arn = env_var("OIDC_PROVIDER_ARN")
+        .map(|v| v.split_ascii_whitespace().map(|v| v.to_string()).collect())
+        .filter(|v: &Vec<String>| !v.is_empty());
     let metrics_builder = PrometheusBuilder::new();
     metrics_builder.install()?;
     let client = Client::try_default().await?;
