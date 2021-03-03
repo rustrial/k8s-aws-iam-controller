@@ -56,14 +56,18 @@ fn env_var(name: &str) -> Option<String> {
 #[derive(Clone)]
 pub struct AwsCredentialsProvider {
     web_identity_provider: WebIdentityProvider,
-    default: DefaultCredentialsProvider,
+    default: Option<DefaultCredentialsProvider>,
 }
 
 impl AwsCredentialsProvider {
-    fn new() -> anyhow::Result<Self> {
+    fn new(with_fallback: bool) -> anyhow::Result<Self> {
         Ok(Self {
             web_identity_provider: WebIdentityProvider::from_k8s_env(),
-            default: DefaultCredentialsProvider::new()?,
+            default: if with_fallback {
+                Some(DefaultCredentialsProvider::new()?)
+            } else {
+                None
+            },
         })
     }
 }
@@ -75,10 +79,16 @@ impl ProvideAwsCredentials for AwsCredentialsProvider {
     ) -> Result<rusoto_core::credential::AwsCredentials, rusoto_core::credential::CredentialsError>
     {
         match self.web_identity_provider.credentials().await {
-            Err(e) => {
-                warn!("failed to obtain AWS credentials from IRSA, will fallback to default credentials provider: {}", e);
-                self.default.credentials().await
-            }
+            Err(e) => match &self.default {
+                Some(default) => {
+                    warn!("failed to obtain AWS credentials from IRSA, will fallback to default credentials provider: {}", e);
+                    default.credentials().await
+                }
+                None => {
+                    warn!("failed to obtain AWS credentials from IRSA: {}", e);
+                    Err(e)?
+                }
+            },
             c => c,
         }
     }
@@ -147,7 +157,14 @@ async fn get_aws_provider() -> anyhow::Result<AutoRefreshingProvider<AwsCredenti
         Check the documentation at https://github.com/rustrial/k8s-aws-iam-controller for more information.
     "#};
 
-    let inner = match AwsCredentialsProvider::new() {
+    // Fallback provider support for local testing. By default fallback is disabled
+    // to make sure the service fails if it cannot obtain credentials. This is important
+    // as it might fail due to temporary environmental conditions (e.g. DNS problems,
+    // connectity issues).
+    // Fallback only makes sense for local testing or if IRSA is not used, e.g. if
+    // node role or Kiam is used.
+    let with_fallback = env_var("ENABLE_AWS_FALLBACK_PROVIDER").is_some();
+    let inner = match AwsCredentialsProvider::new(with_fallback) {
         Ok(p) => p,
         Err(e) => {
             error!("Failed to create AwsCredentialsProvider: {}\n\n{}", e, hint);
