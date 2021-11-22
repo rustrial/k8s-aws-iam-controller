@@ -221,7 +221,7 @@ async fn main() -> anyhow::Result<()> {
         )
     };
     let storage_namespace =
-        env_var("STORAGE_NAMESPACE").unwrap_or_else(|| client_config.default_ns);
+        env_var("STORAGE_NAMESPACE").unwrap_or_else(|| client_config.default_namespace);
     info!(
         "Controller is using {} as storage namesapce for RoleUsagePolicy objects",
         storage_namespace
@@ -281,7 +281,6 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let tust_policy_statement_controller = TrustPolicyStatementController {
-        whoami,
         provider: provider.clone(),
         configuration: configuration.clone(),
         useage_policy_cache: useage_policy_store.clone(),

@@ -1,3 +1,4 @@
+use kube::CustomResourceExt;
 use rustrial_k8s_aws_iam_apis::{RoleUsagePolicy, TrustPolicyStatement};
 use serde_yaml;
 
