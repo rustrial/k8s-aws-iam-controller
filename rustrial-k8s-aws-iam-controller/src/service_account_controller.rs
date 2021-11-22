@@ -6,8 +6,8 @@ use k8s_openapi::{
     apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference},
 };
 use kube::{
-    api::{DeleteParams, ListParams, Meta, Patch, PatchParams},
-    Api, Error,
+    api::{DeleteParams, ListParams, Patch, PatchParams},
+    Api, Error, ResourceExt,
 };
 use kube_runtime::{
     controller::{Context as Ctx, Controller, ReconcilerAction},

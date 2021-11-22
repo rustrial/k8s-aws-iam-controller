@@ -6,8 +6,8 @@ use crate::{
 use futures::{Future, StreamExt};
 use json_patch::diff;
 use kube::{
-    api::{ListParams, Meta, Patch, PatchParams},
-    Api, Client, Error,
+    api::{ListParams, Patch, PatchParams},
+    Api, Client, Error, ResourceExt,
 };
 use kube_runtime::{
     controller::{Context as Ctx, Controller, ReconcilerAction},
@@ -25,7 +25,6 @@ use rusoto_iam::{
     GetRoleError, GetRoleRequest, Iam, IamClient, ListRoleTagsRequest, Role,
     UpdateAssumeRolePolicyRequest,
 };
-use rusoto_sts::GetCallerIdentityResponse;
 use rustrial_k8s_aws_iam_apis::{
     Authorization, Condition, Provider, RoleUsagePolicy, RoleUsagePolicySpec, TrustPolicyStatement,
     API_GROUP,
@@ -244,7 +243,6 @@ impl IamRoleRef {
 /// Controller which creates `TrustPolicyStatement` objects from `ServiceAccount` objects
 /// that are annotated with an AWS IAM Role.
 pub(crate) struct TrustPolicyStatementController {
-    pub whoami: GetCallerIdentityResponse,
     pub provider: AutoRefreshingProvider<AwsCredentialsProvider>,
     pub configuration: Configuration,
     pub useage_policy_cache: Store<RoleUsagePolicy>,
@@ -297,8 +295,8 @@ impl ReconcileEvent {
             ospec.status = None;
             mspec.status = None;
             let patch = diff(
-                &serde_json::to_value(&ospec)?,
-                &serde_json::to_value(&mspec)?,
+                &serde_json::to_value(&ospec).map_err(|e| Error::SerdeError(e))?,
+                &serde_json::to_value(&mspec).map_err(|e| Error::SerdeError(e))?,
             );
             if patch.0.is_empty() {
                 None
@@ -324,7 +322,7 @@ impl ReconcileEvent {
                 "Patch object {}/{} ({:?}) with {} -> {:?}",
                 namespace,
                 self.original.name(),
-                self.original.resource_ver(),
+                self.original.resource_version(),
                 patch_txt,
                 response
             );
@@ -338,15 +336,15 @@ impl ReconcileEvent {
         }
         let status_patch = {
             let patch = diff(
-                &serde_json::to_value(&self.original.status)?,
-                &serde_json::to_value(&modified.status)?,
+                &serde_json::to_value(&self.original.status).map_err(|e| Error::SerdeError(e))?,
+                &serde_json::to_value(&modified.status).map_err(|e| Error::SerdeError(e))?,
             );
             if patch.0.is_empty() {
                 None
             } else {
                 Some(diff(
-                    &serde_json::to_value(&self.original)?,
-                    &serde_json::to_value(&modified)?,
+                    &serde_json::to_value(&self.original).map_err(|e| Error::SerdeError(e))?,
+                    &serde_json::to_value(&modified).map_err(|e| Error::SerdeError(e))?,
                 ))
             }
         };
@@ -367,7 +365,7 @@ impl ReconcileEvent {
                 "Patch object status {}/{} ({:?}) with {} -> {:?}",
                 namespace,
                 self.original.name(),
-                self.original.resource_ver(),
+                self.original.resource_version(),
                 patch_txt,
                 response
             );

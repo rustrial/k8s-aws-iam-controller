@@ -6,6 +6,7 @@ metadata:
 spec:
   group: iam.aws.rustrial.org
   names:
+    categories: []
     kind: TrustPolicyStatement
     plural: trustpolicystatements
     shortNames: []
@@ -143,6 +144,7 @@ metadata:
 spec:
   group: iam.aws.rustrial.org
   names:
+    categories: []
     kind: RoleUsagePolicy
     plural: roleusagepolicies
     shortNames: []
