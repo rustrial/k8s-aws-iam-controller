@@ -1,8 +1,10 @@
 use crate::{
     arn::ARN,
     iam_policy::{Action, ConditionMap, Conditions, Effect, PolicyDocument, Principal, Statement},
-    AwsCredentialsProvider, Configuration, CrdError,
+    Configuration, CrdError,
 };
+use aws_sdk_iam::{error::GetRoleError, model::Role, types::SdkError};
+use aws_types::SdkConfig;
 use futures::{Future, StreamExt};
 use json_patch::diff;
 use kube::{
@@ -18,14 +20,6 @@ use lazy_static::lazy_static;
 use log::{error, info, warn};
 use metrics::{counter, histogram};
 use regex::Regex;
-use rusoto_core::{
-    credential::{AutoRefreshingProvider, ProvideAwsCredentials},
-    HttpClient, Region, RusotoError,
-};
-use rusoto_iam::{
-    GetRoleError, GetRoleRequest, Iam, IamClient, ListRoleTagsRequest, Role,
-    UpdateAssumeRolePolicyRequest,
-};
 use rustrial_k8s_aws_iam_apis::{
     Authorization, Condition, Provider, RoleUsagePolicy, RoleUsagePolicySpec, TrustPolicyStatement,
     API_GROUP,
@@ -39,12 +33,10 @@ const EMPTY_ASSUME_ROLE_POLICY: &'static str = r#"{"Version": "2008-10-17","Stat
 
 lazy_static! {
     pub(crate) static ref ROLE_ARN: Regex =
-        Regex::new(r#"^arn:aws:iam::(\d+):role/((?:[^/]+/)*([^/]+))$"#).unwrap();
+        Regex::new(r#"^arn:[^:]+:iam::(\d+):role/((?:[^/]+/)*([^/]+))$"#).unwrap();
 }
 
 struct IamRoleRef {
-    //accountId: String,
-    //path_and_name: String,
     name: String,
     arn: String,
 }
@@ -71,20 +63,18 @@ impl IamRoleRef {
         self.name.as_str()
     }
 
-    async fn resolve(
-        &self,
-        provider: impl ProvideAwsCredentials + Sync + Send + 'static,
-    ) -> anyhow::Result<Option<Role>> {
-        let client = IamClient::new_with(HttpClient::new()?, provider, Region::UsEast1);
+    async fn resolve(&self, provider: &SdkConfig) -> anyhow::Result<Option<Role>> {
+        let client = aws_sdk_iam::Client::new(provider);
         match client
-            .get_role(GetRoleRequest {
-                role_name: self.name().to_string(),
-            })
+            .get_role()
+            .role_name(self.name())
+            .send()
             .await
+            .map(|v| v.role)
         {
             Ok(response) => {
-                let role = response.role;
-                if role.arn == self.arn {
+                let role = response.filter(|r| r.arn().filter(|a| a == &self.arn).is_some());
+                if let Some(role) = role {
                     Ok(Some(role))
                 } else {
                     // should we ever add cross AWS account support, we can remove this branch.
@@ -95,14 +85,18 @@ impl IamRoleRef {
                 }
             }
             // Role not found.
-            Err(RusotoError::Service(GetRoleError::NoSuchEntity(_))) => Ok(None),
+            Err(SdkError::<GetRoleError, _>::ServiceError { err, .. })
+                if err.is_no_such_entity_exception() =>
+            {
+                Ok(None)
+            }
             Err(e) => Err(e)?,
         }
     }
 
     pub async fn patch_assume_role_policy<F>(
         &self,
-        provider: impl ProvideAwsCredentials + Sync + Send + 'static,
+        provider: &SdkConfig,
         role: &Role,
         patcher: F,
     ) -> anyhow::Result<()>
@@ -112,22 +106,29 @@ impl IamRoleRef {
         let policy = role
             .assume_role_policy_document
             .as_deref()
-            .unwrap_or(EMPTY_ASSUME_ROLE_POLICY);
-        let original: PolicyDocument = serde_json::from_str(policy)?;
+            .map(|doc| {
+                urlencoding::decode(doc)
+                    .map(|v| v.to_string())
+                    .unwrap_or(doc.to_string())
+            })
+            .unwrap_or(EMPTY_ASSUME_ROLE_POLICY.to_string());
+        let original: PolicyDocument = serde_json::from_str(policy.as_str())?;
         let mut policy_document = original.clone();
         patcher(&mut policy_document.statement)?;
         if original != policy_document {
-            let client = IamClient::new_with(HttpClient::new()?, provider, Region::UsEast1);
+            let client = aws_sdk_iam::Client::new(provider);
             let policy_document = serde_json::to_string(&policy_document)?;
             info!(
-                "Update TrustPolicy on IAM Role {}\nOld: {}\n New: {}",
-                role.arn, policy, policy_document
+                "Update TrustPolicy on IAM Role {}\nOld: {}\nNew: {}",
+                role.arn.as_deref().unwrap_or(""),
+                policy,
+                policy_document
             );
             client
-                .update_assume_role_policy(UpdateAssumeRolePolicyRequest {
-                    role_name: role.role_name.clone(),
-                    policy_document,
-                })
+                .update_assume_role_policy()
+                .set_role_name(role.role_name.clone())
+                .policy_document(policy_document)
+                .send()
                 .await?;
         }
         Ok(())
@@ -172,7 +173,7 @@ impl IamRoleRef {
 
     pub async fn add_trust_policy_statement(
         &self,
-        provider: impl ProvideAwsCredentials + Sync + Send + 'static,
+        provider: &SdkConfig,
         tp: &TrustPolicyStatement,
         role: &Role,
     ) -> anyhow::Result<()> {
@@ -215,10 +216,10 @@ impl IamRoleRef {
 
     pub async fn remove_trust_policy_statement(
         &self,
-        provider: impl ProvideAwsCredentials + Sync + Send + Clone + 'static,
+        provider: &SdkConfig,
         tp: &TrustPolicyStatement,
     ) -> anyhow::Result<()> {
-        if let Some(role) = self.resolve(provider.clone()).await? {
+        if let Some(role) = self.resolve(provider).await? {
             let sids: Vec<String> = tp
                 .spec
                 .providers
@@ -244,7 +245,7 @@ impl IamRoleRef {
 /// Controller which creates `TrustPolicyStatement` objects from `ServiceAccount` objects
 /// that are annotated with an AWS IAM Role.
 pub(crate) struct TrustPolicyStatementController {
-    pub provider: AutoRefreshingProvider<AwsCredentialsProvider>,
+    pub provider: SdkConfig,
     pub configuration: Configuration,
     pub useage_policy_cache: Store<RoleUsagePolicy>,
 }
@@ -393,7 +394,7 @@ impl TrustPolicyStatementController {
         tp.set_status(None);
         let generation = tp.metadata.generation.clone();
         match IamRoleRef::try_from(tp.spec.role_arn.as_str()) {
-            Ok(role_ref) => match role_ref.resolve(self.provider.clone()).await {
+            Ok(role_ref) => match role_ref.resolve(&self.provider).await {
                 Ok(Some(role)) => {
                     let authorizations = match self.get_authorizations(&tp, &role).await {
                         Ok(a) => a,
@@ -411,7 +412,7 @@ impl TrustPolicyStatementController {
                     if authorizations.len() > 0 {
                         tp.set_authorizations(Some(authorizations));
                         match role_ref
-                            .add_trust_policy_statement(self.provider.clone(), &tp, &role)
+                            .add_trust_policy_statement(&self.provider, &tp, &role)
                             .await
                         {
                             Ok(_) => {
@@ -438,12 +439,12 @@ impl TrustPolicyStatementController {
                     } else {
                         tp.set_authorizations(None);
                         if let Err(e) = role_ref
-                            .remove_trust_policy_statement(self.provider.clone(), &tp)
+                            .remove_trust_policy_statement(&self.provider, &tp)
                             .await
                         {
                             error!(
                                 "Error while removing TrustPolicy Statement of {}/{} from IAM Role {}: {}",
-                                namespace, tp.name(), role.arn, e
+                                namespace, tp.name(), role.arn.as_deref().unwrap_or(""), e
                             );
                             tp.set_status(Some(format!(
                                 "Failed to remove TrustPolicy Statement from IAM Role: {}",
@@ -502,20 +503,23 @@ impl TrustPolicyStatementController {
     }
 
     async fn get_role_tags(&self, role: &Role) -> anyhow::Result<HashMap<String, String>> {
-        let client =
-            IamClient::new_with(HttpClient::new()?, self.provider.clone(), Region::UsEast1);
+        let client = aws_sdk_iam::Client::new(&self.provider);
         let mut all_tags = HashMap::new();
-        let mut lp = ListRoleTagsRequest {
-            role_name: role.role_name.clone(),
-            ..Default::default()
-        };
+        let mut marker = None;
         loop {
-            let tags = client.list_role_tags(lp.clone()).await?;
-            lp.marker = tags.marker;
-            for tag in tags.tags {
-                all_tags.insert(tag.key, tag.value);
+            let tags = client
+                .list_role_tags()
+                .set_role_name(role.role_name.clone())
+                .set_marker(marker)
+                .send()
+                .await?;
+            marker = tags.marker;
+            for tag in tags.tags.unwrap_or_default() {
+                if let (Some(key), Some(value)) = (tag.key, tag.value) {
+                    all_tags.insert(key, value);
+                }
             }
-            if lp.marker.is_none() {
+            if marker.is_none() {
                 break;
             }
         }
@@ -594,7 +598,7 @@ impl TrustPolicyStatementController {
                 Self::matches(
                     &p.spec,
                     namespace.as_str(),
-                    role.arn.as_str(),
+                    role.arn.as_deref().unwrap_or(""),
                     role.permissions_boundary
                         .as_ref()
                         .map(|v| v.permissions_boundary_arn.clone())
@@ -617,7 +621,7 @@ impl TrustPolicyStatementController {
             // If ARN is syntactically valid, remove trust policy from Role.
             Ok(role_ref) => {
                 role_ref
-                    .remove_trust_policy_statement(self.provider.clone(), tp)
+                    .remove_trust_policy_statement(&self.provider, tp)
                     .await?
             }
             // If ARN is syntactically invalid, we do not need to remove anything.
@@ -685,7 +689,7 @@ impl TrustPolicyStatementController {
             duration.as_nanos() as f64
         );
         match &result {
-            Ok(_) => error!("{} succeeded", log_prefix),
+            Ok(_) => info!("{} succeeded", log_prefix),
             Err(e) => error!("{} failed: {}", log_prefix, e),
         }
         result
@@ -1016,5 +1020,12 @@ mod tests {
         assert!(!TrustPolicyStatementController::tags_match(
             &required, &available
         ));
+    }
+
+    #[test]
+    fn mach_role_arn() -> anyhow::Result<()> {
+        assert!(ROLE_ARN.is_match("arn:aws:iam::999999999999:role/my-role-name"));
+        assert!(ROLE_ARN.is_match("arn:aws-gov:iam::999999999999:role/my-role-name"));
+        Ok(())
     }
 }

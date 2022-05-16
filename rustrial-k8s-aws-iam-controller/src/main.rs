@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate log;
+use aws_types::{credentials::ProvideCredentials, SdkConfig};
 use futures::{FutureExt, StreamExt};
 use indoc::indoc;
 use k8s_openapi::api::core::v1::ServiceAccount;
@@ -7,11 +8,6 @@ use kube::{api::ListParams, Api, Client, Config};
 use kube_runtime::{reflector, reflector::store::Writer, watcher};
 use log::{error, info, warn};
 use metrics_exporter_prometheus::PrometheusBuilder;
-use rusoto_core::{
-    credential::{AutoRefreshingProvider, DefaultCredentialsProvider, ProvideAwsCredentials},
-    HttpClient, Region,
-};
-use rusoto_sts::{GetCallerIdentityRequest, Sts, StsClient, WebIdentityProvider};
 use rustrial_k8s_aws_iam_apis::{RoleUsagePolicy, TrustPolicyStatement};
 use std::future::pending;
 
@@ -23,7 +19,6 @@ mod service_account_controller;
 use service_account_controller::*;
 
 mod trust_policy_statement_controller;
-use async_trait::async_trait;
 use trust_policy_statement_controller::*;
 #[derive(thiserror::Error, Debug)]
 enum CrdError {
@@ -53,49 +48,8 @@ fn env_var(name: &str) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
-#[derive(Clone)]
-pub struct AwsCredentialsProvider {
-    web_identity_provider: WebIdentityProvider,
-    default: Option<DefaultCredentialsProvider>,
-}
-
-impl AwsCredentialsProvider {
-    fn new(with_fallback: bool) -> anyhow::Result<Self> {
-        Ok(Self {
-            web_identity_provider: WebIdentityProvider::from_k8s_env(),
-            default: if with_fallback {
-                Some(DefaultCredentialsProvider::new()?)
-            } else {
-                None
-            },
-        })
-    }
-}
-
-#[async_trait]
-impl ProvideAwsCredentials for AwsCredentialsProvider {
-    async fn credentials(
-        &self,
-    ) -> Result<rusoto_core::credential::AwsCredentials, rusoto_core::credential::CredentialsError>
-    {
-        match self.web_identity_provider.credentials().await {
-            Err(e) => match &self.default {
-                Some(default) => {
-                    warn!("failed to obtain AWS credentials from IRSA, will fallback to default credentials provider: {}", e);
-                    default.credentials().await
-                }
-                None => {
-                    warn!("failed to obtain AWS credentials from IRSA: {}", e);
-                    Err(e)?
-                }
-            },
-            c => c,
-        }
-    }
-}
-
 // Helper with verbose error logging.
-async fn get_aws_provider() -> anyhow::Result<AutoRefreshingProvider<AwsCredentialsProvider>> {
+async fn get_aws_provider() -> anyhow::Result<SdkConfig> {
     let hint = indoc! {r#"
         Controller terminated due to wrong or missing AWS Role setup, please fix controller's
         AWS permission according to the instructions below.
@@ -157,34 +111,22 @@ async fn get_aws_provider() -> anyhow::Result<AutoRefreshingProvider<AwsCredenti
         Check the documentation at https://github.com/rustrial/k8s-aws-iam-controller for more information.
     "#};
 
-    // Fallback provider support for local testing. By default fallback is disabled
-    // to make sure the service fails if it cannot obtain credentials. This is important
-    // as it might fail due to temporary environmental conditions (e.g. DNS problems,
-    // connectity issues).
-    // Fallback only makes sense for local testing or if IRSA is not used, e.g. if
-    // node role or Kiam is used.
-    let with_fallback = env_var("ENABLE_AWS_FALLBACK_PROVIDER").is_some();
-    let inner = match AwsCredentialsProvider::new(with_fallback) {
-        Ok(p) => p,
+    let config = aws_config::load_from_env().await;
+    if let Err(e) = config
+        .credentials_provider()
+        .clone()
+        .unwrap()
+        .provide_credentials()
+        .await
+    {
+        error!("Failed to create AwsCredentialsProvider: {}\n\n{}", e, hint);
+        Err(e)?
+    }
+    let test = aws_sdk_iam::Client::new(&config);
+    match test.list_roles().send().await {
+        Ok(_) => Ok(config),
         Err(e) => {
             error!("Failed to create AwsCredentialsProvider: {}\n\n{}", e, hint);
-            Err(e)?
-        }
-    };
-    let provider = match AutoRefreshingProvider::new(inner) {
-        Err(e) => {
-            error!(
-                "Failed to create AutoRefreshingProvider for AWS credentials: {}\n\n{}",
-                e, hint
-            );
-            Err(e)?
-        }
-        Ok(p) => p,
-    };
-    match provider.credentials().await {
-        Ok(_) => Ok(provider),
-        Err(e) => {
-            log::error!("Unable to obtain AWS credentials: {}\n\n{}", e, hint);
             Err(e)?
         }
     }
@@ -193,11 +135,9 @@ async fn get_aws_provider() -> anyhow::Result<AutoRefreshingProvider<AwsCredenti
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
-    let provider = get_aws_provider().await?;
-    let sts_client = StsClient::new_with(HttpClient::new()?, provider.clone(), Region::default());
-    let whoami = sts_client
-        .get_caller_identity(GetCallerIdentityRequest::default())
-        .await?;
+    let config = get_aws_provider().await?;
+    let sts_client = aws_sdk_sts::Client::new(&config);
+    let whoami = sts_client.get_caller_identity().send().await?;
 
     info!("Controller is running with AWS Identity {:?}", whoami);
     let oidc_provider_arn = env_var("OIDC_PROVIDER_ARN")
@@ -281,12 +221,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let tust_policy_statement_controller = TrustPolicyStatementController {
-        provider: provider.clone(),
+        provider: config.clone(),
         configuration: configuration.clone(),
         useage_policy_cache: useage_policy_store.clone(),
     };
 
-    let garbage_collector = GarbageCollector { provider };
+    let garbage_collector = GarbageCollector::new(config);
 
     let schedule = tokio::spawn(garbage_collector.start());
 

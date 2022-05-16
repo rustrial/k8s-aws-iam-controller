@@ -1,29 +1,24 @@
-use std::time::Duration;
-
 use crate::{
     env_var,
     iam_policy::{PolicyDocument, Principal, PrincipalKind, Values},
-    AwsCredentialsProvider,
 };
+use aws_sdk_iam::model::Role;
+use aws_types::SdkConfig;
 use lazy_static::lazy_static;
 use log::warn;
 use metrics::gauge;
 use regex::Regex;
-use rusoto_core::{credential::AutoRefreshingProvider, HttpClient, Region};
-use rusoto_iam::{
-    Iam, IamClient, ListOpenIDConnectProvidersRequest, ListRolesRequest, Role,
-    UpdateAssumeRolePolicyRequest,
-};
+use std::time::Duration;
 
 lazy_static! {
     static ref PROVIDER_ARN: Regex = Regex::new(
-        r#"^arn:aws:iam::(\d+):oidc-provider/(oidc\.eks\.[^.]+\.amazonaws\.com/id/.*)$"#
+        r#"^arn:[^:]+:iam::(\d+):oidc-provider/(oidc\.eks\.[^.]+\.amazonaws\.com/id/.*)$"#
     )
     .unwrap();
 }
 
 pub struct GarbageCollector {
-    pub provider: AutoRefreshingProvider<AwsCredentialsProvider>,
+    pub provider: SdkConfig,
 }
 
 struct Candidate {
@@ -33,10 +28,12 @@ struct Candidate {
 }
 
 impl GarbageCollector {
-    pub async fn provider_arns(&self, client: &IamClient) -> anyhow::Result<Vec<String>> {
-        let providers = client
-            .list_open_id_connect_providers(ListOpenIDConnectProvidersRequest::default())
-            .await?;
+    pub fn new(config: SdkConfig) -> Self {
+        Self { provider: config }
+    }
+
+    pub async fn provider_arns(&self, client: &aws_sdk_iam::Client) -> anyhow::Result<Vec<String>> {
+        let providers = client.list_open_id_connect_providers().send().await?;
         Ok(providers
             .open_id_connect_provider_list
             .unwrap_or_else(|| vec![])
@@ -45,17 +42,25 @@ impl GarbageCollector {
             .collect())
     }
 
-    async fn mark(&self, client: &IamClient) -> anyhow::Result<(usize, usize, Vec<Candidate>)> {
+    async fn mark(
+        &self,
+        client: &aws_sdk_iam::Client,
+    ) -> anyhow::Result<(usize, usize, Vec<Candidate>)> {
         let providers = self.provider_arns(&client).await?;
-        let mut lp = ListRolesRequest::default();
         let mut candidates: Vec<Candidate> = vec![];
         let mut scanned_roles = 0usize;
         let mut scanned_statements = 0usize;
+        let mut marker = None;
         loop {
-            let roles = client.list_roles(lp.clone()).await?;
-            scanned_roles += roles.roles.len();
-            for role in roles.roles {
+            let roles = client.list_roles().set_marker(marker).send().await?;
+            marker = roles.marker;
+            let roles = roles.roles.unwrap_or_default();
+            scanned_roles += roles.len();
+            for role in roles {
                 if let Some(raw_policy_document) = &role.assume_role_policy_document {
+                    let raw_policy_document = urlencoding::decode(raw_policy_document.as_str())
+                        .map(|v| v.to_string())
+                        .unwrap_or(raw_policy_document.to_string());
                     let pd = serde_json::from_str::<PolicyDocument>(raw_policy_document.as_str());
                     match pd {
                         Ok(policy_document) => {
@@ -72,7 +77,7 @@ impl GarbageCollector {
                                             if let (Some(captures), Some(role_captures)) = (
                                                 PROVIDER_ARN.captures(provider_arn.as_str()),
                                                 crate::trust_policy_statement_controller::ROLE_ARN
-                                                    .captures(role.arn.as_str()),
+                                                    .captures(role.arn.as_deref().unwrap_or("")),
                                             ) {
                                                 let same_account = captures[1] == role_captures[1];
                                                 if same_account
@@ -103,21 +108,26 @@ impl GarbageCollector {
                         Err(e) => {
                             warn!(
                                 "Error parsing Trust Policy of IAM Role {}: {} {}",
-                                role.arn, e, raw_policy_document
+                                role.arn.as_deref().unwrap_or(""),
+                                e,
+                                raw_policy_document
                             );
                         }
                     }
                 }
             }
-            lp.marker = roles.marker;
-            if lp.marker.is_none() {
+            if marker.is_none() {
                 break;
             }
         }
         Ok((scanned_roles, scanned_statements, candidates))
     }
 
-    async fn sweap(&self, client: &IamClient, candidates: Vec<Candidate>) -> anyhow::Result<usize> {
+    async fn sweap(
+        &self,
+        client: &aws_sdk_iam::Client,
+        candidates: Vec<Candidate>,
+    ) -> anyhow::Result<usize> {
         let providers = self.provider_arns(&client).await?;
         let mut sweaped = 0usize;
         for mut candidate in candidates {
@@ -144,15 +154,16 @@ impl GarbageCollector {
                         Ok(txt) => {
                             info!(
                                 "Update Trust Policy of Role {}, removing {} statements -> {}",
-                                candidate.role.arn, removed_statements, txt
+                                candidate.role.arn.as_deref().unwrap_or(""),
+                                removed_statements,
+                                txt
                             );
                             let response = client
-                                .update_assume_role_policy(UpdateAssumeRolePolicyRequest {
-                                    role_name: candidate.role.role_name,
-                                    policy_document: txt,
-                                })
+                                .update_assume_role_policy()
+                                .set_role_name(candidate.role.role_name.clone())
+                                .policy_document(txt)
+                                .send()
                                 .await;
-                            //let response: anyhow::Result<()> = Ok(()); //TODO uncomment above
                             match response {
                                 Ok(_) => {
                                     sweaped += removed_statements;
@@ -169,8 +180,7 @@ impl GarbageCollector {
     }
 
     async fn run(&self) -> anyhow::Result<()> {
-        let client =
-            IamClient::new_with(HttpClient::new()?, self.provider.clone(), Region::UsEast1);
+        let client = aws_sdk_iam::Client::new(&self.provider);
         let (scanned_roles, scanned_statements, candidates) = self.mark(&client).await?;
         let sweaped = self.sweap(&client, candidates).await?;
         info!(
@@ -203,5 +213,18 @@ impl GarbageCollector {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn mach_provider_arn() -> anyhow::Result<()> {
+        assert!(PROVIDER_ARN.is_match("arn:aws:iam::999999999999:oidc-provider/oidc.eks.eu-central-1.amazonaws.com/id/E42C69DE1ACF857BD6A0D1863B5378CD"));
+        assert!(PROVIDER_ARN.is_match("arn:aws-gov:iam::999999999999:oidc-provider/oidc.eks.eu-west-2.amazonaws.com/id/E42C69DE1ACF857BD6A0D1863B5378CD"));
+        Ok(())
     }
 }

@@ -18,24 +18,32 @@ impl Default for Effect {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum Values {
+    /// Scalar (non-arrray) value representation.
     One(String),
+    /// Array value representation.
     Many(Vec<String>),
 }
 
 impl Values {
+    pub fn new<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Values {
+        let values: Vec<String> = p.into_iter().map(|p| p.to_string()).collect();
+        if values.len() == 1 {
+            // AWS IAM API normalizes array values with a single value to a corresponding
+            // scalar (non-array) value. To make sure we do not get false-positives when
+            // diffing `Values` resp. to avoid unnecessary update calls, we apply the same
+            // normalization here.
+            if let Some(first) = values.first() {
+                Values::one(first)
+            } else {
+                Values::Many(values)
+            }
+        } else {
+            Values::Many(values)
+        }
+    }
+
     pub fn one<S: ToString>(p: S) -> Values {
         Values::One(p.to_string())
-    }
-
-    pub fn many<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Values {
-        Values::Many(p.into_iter().map(|v| v.to_string()).collect())
-    }
-
-    pub fn into_many(self) -> Self {
-        match self {
-            Values::One(v) => Values::Many(vec![v]),
-            me => me,
-        }
     }
 }
 
@@ -94,68 +102,68 @@ pub enum Principal {
 
 impl PrincipalKind {
     pub fn aws<S: ToString, V: IntoIterator<Item = S>>(p: V) -> PrincipalKind {
-        PrincipalKind::AWS(Values::many(p))
+        PrincipalKind::AWS(Values::new(p))
     }
 
     pub fn service<S: ToString, V: IntoIterator<Item = S>>(p: V) -> PrincipalKind {
-        PrincipalKind::Service(Values::many(p))
+        PrincipalKind::Service(Values::new(p))
     }
 
     pub fn federated<S: ToString, V: IntoIterator<Item = S>>(p: V) -> PrincipalKind {
-        PrincipalKind::Federated(Values::many(p))
+        PrincipalKind::Federated(Values::new(p))
     }
 
     pub fn canonical_user<S: ToString, V: IntoIterator<Item = S>>(p: V) -> PrincipalKind {
-        PrincipalKind::CanonicalUser(Values::many(p))
+        PrincipalKind::CanonicalUser(Values::new(p))
     }
 }
 
 impl Principal {
     pub fn aws<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Principal {
         Principal::Principal {
-            principal: PrincipalKind::AWS(Values::many(p)),
+            principal: PrincipalKind::AWS(Values::new(p)),
         }
     }
 
     pub fn not_aws<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Principal {
         Principal::NotPrincipal {
-            principal: PrincipalKind::AWS(Values::many(p)),
+            principal: PrincipalKind::AWS(Values::new(p)),
         }
     }
 
     pub fn service<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Principal {
         Principal::Principal {
-            principal: PrincipalKind::Service(Values::many(p)),
+            principal: PrincipalKind::Service(Values::new(p)),
         }
     }
 
     pub fn not_service<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Principal {
         Principal::NotPrincipal {
-            principal: PrincipalKind::Service(Values::many(p)),
+            principal: PrincipalKind::Service(Values::new(p)),
         }
     }
 
     pub fn federated<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Principal {
         Principal::Principal {
-            principal: PrincipalKind::Federated(Values::many(p)),
+            principal: PrincipalKind::Federated(Values::new(p)),
         }
     }
 
     pub fn not_federated<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Principal {
         Principal::NotPrincipal {
-            principal: PrincipalKind::Federated(Values::many(p)),
+            principal: PrincipalKind::Federated(Values::new(p)),
         }
     }
 
     pub fn canonical_user<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Principal {
         Principal::Principal {
-            principal: PrincipalKind::CanonicalUser(Values::many(p)),
+            principal: PrincipalKind::CanonicalUser(Values::new(p)),
         }
     }
 
     pub fn not_canonical_user<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Principal {
         Principal::NotPrincipal {
-            principal: PrincipalKind::CanonicalUser(Values::many(p)),
+            principal: PrincipalKind::CanonicalUser(Values::new(p)),
         }
     }
 
@@ -225,7 +233,7 @@ impl Action {
 
     pub fn actions<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Action {
         Action::Action {
-            action: Values::many(p),
+            action: Values::new(p),
         }
     }
 
@@ -237,7 +245,7 @@ impl Action {
 
     pub fn not_actions<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Action {
         Action::NotAction {
-            action: Values::many(p),
+            action: Values::new(p),
         }
     }
 }
@@ -313,7 +321,7 @@ impl Resource {
 
     pub fn resources<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Resource {
         Resource::Resource {
-            resource: Values::many(p),
+            resource: Values::new(p),
         }
     }
 
@@ -325,7 +333,7 @@ impl Resource {
 
     pub fn not_resources<S: ToString, V: IntoIterator<Item = S>>(p: V) -> Resource {
         Resource::NotResource {
-            resource: Values::many(p),
+            resource: Values::new(p),
         }
     }
 }
@@ -567,7 +575,12 @@ mod tests {
     fn prinicpal_aws() -> anyhow::Result<()> {
         let p = PrincipalKind::aws(&["x"]);
         let txt = serde_json::to_string(&p).unwrap();
-        assert_eq!(r#"{"AWS":["x"]}"#, txt);
+        assert_eq!(r#"{"AWS":"x"}"#, txt);
+        assert_eq!(p, serde_json::from_str(txt.as_str()).unwrap());
+
+        let p = PrincipalKind::aws(&["x", "v"]);
+        let txt = serde_json::to_string(&p).unwrap();
+        assert_eq!(r#"{"AWS":["x","v"]}"#, txt);
         assert_eq!(p, serde_json::from_str(txt.as_str()).unwrap());
         Ok(())
     }
@@ -576,7 +589,7 @@ mod tests {
     fn prinicpal_service() -> anyhow::Result<()> {
         let p = PrincipalKind::service(&["x"]);
         let txt = serde_json::to_string(&p).unwrap();
-        assert_eq!(r#"{"Service":["x"]}"#, txt);
+        assert_eq!(r#"{"Service":"x"}"#, txt);
         assert_eq!(p, serde_json::from_str(txt.as_str()).unwrap());
         Ok(())
     }
@@ -585,7 +598,7 @@ mod tests {
     fn prinicpal_federated() -> anyhow::Result<()> {
         let p = PrincipalKind::federated(&["x"]);
         let txt = serde_json::to_string(&p).unwrap();
-        assert_eq!(r#"{"Federated":["x"]}"#, txt);
+        assert_eq!(r#"{"Federated":"x"}"#, txt);
         assert_eq!(p, serde_json::from_str(txt.as_str()).unwrap());
         Ok(())
     }
@@ -594,7 +607,7 @@ mod tests {
     fn prinicpal_canonical_user() -> anyhow::Result<()> {
         let p = PrincipalKind::canonical_user(&["x"]);
         let txt = serde_json::to_string(&p).unwrap();
-        assert_eq!(r#"{"CanonicalUser":["x"]}"#, txt);
+        assert_eq!(r#"{"CanonicalUser":"x"}"#, txt);
         assert_eq!(p, serde_json::from_str(txt.as_str()).unwrap());
         Ok(())
     }
@@ -628,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn action_one() -> anyhow::Result<()> {
+    fn action_all() -> anyhow::Result<()> {
         let a = Action::action("*");
         let txt = serde_json::to_string(&a).unwrap();
         assert_eq!(r#"{"Action":"*"}"#, txt);
@@ -637,10 +650,19 @@ mod tests {
     }
 
     #[test]
-    fn action_many() -> anyhow::Result<()> {
+    fn action_one() -> anyhow::Result<()> {
         let a = Action::actions(&["a"]);
         let txt = serde_json::to_string(&a).unwrap();
-        assert_eq!(r#"{"Action":["a"]}"#, txt,);
+        assert_eq!(r#"{"Action":"a"}"#, txt,);
+        assert_eq!(a, serde_json::from_str(txt.as_str()).unwrap());
+        Ok(())
+    }
+
+    #[test]
+    fn action_many() -> anyhow::Result<()> {
+        let a = Action::actions(&["a", "b"]);
+        let txt = serde_json::to_string(&a).unwrap();
+        assert_eq!(r#"{"Action":["a","b"]}"#, txt,);
         assert_eq!(a, serde_json::from_str(txt.as_str()).unwrap());
         Ok(())
     }
@@ -670,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn resource_one() -> anyhow::Result<()> {
+    fn resource_all() -> anyhow::Result<()> {
         let a = Resource::resource("*");
         let txt = serde_json::to_string(&a).unwrap();
         assert_eq!(r#"{"Resource":"*"}"#, txt);
@@ -679,10 +701,19 @@ mod tests {
     }
 
     #[test]
-    fn resource_many() -> anyhow::Result<()> {
+    fn resource_one() -> anyhow::Result<()> {
         let a = Resource::resources(&["a"]);
         let txt = serde_json::to_string(&a).unwrap();
-        assert_eq!(r#"{"Resource":["a"]}"#, txt,);
+        assert_eq!(r#"{"Resource":"a"}"#, txt,);
+        assert_eq!(a, serde_json::from_str(txt.as_str()).unwrap());
+        Ok(())
+    }
+
+    #[test]
+    fn resource_many() -> anyhow::Result<()> {
+        let a = Resource::resources(&["a", "b"]);
+        let txt = serde_json::to_string(&a).unwrap();
+        assert_eq!(r#"{"Resource":["a","b"]}"#, txt,);
         assert_eq!(a, serde_json::from_str(txt.as_str()).unwrap());
         Ok(())
     }
