@@ -11,6 +11,7 @@ use kube::{
 };
 use kube_runtime::{
     controller::{Action as RAction, Context as Ctx, Controller},
+    finalizer::{self, Event},
     reflector::{ObjectRef, Store},
 };
 use lazy_static::lazy_static;
@@ -383,10 +384,13 @@ impl ReconcileEvent {
 }
 
 impl TrustPolicyStatementController {
-    async fn reconcile_trust_policy(&self, tp: &mut ReconcileEvent) -> anyhow::Result<RAction> {
+    async fn reconcile_trust_policy(
+        &self,
+        tp: Arc<TrustPolicyStatement>,
+    ) -> anyhow::Result<RAction> {
+        let mut tp = ReconcileEvent::new(tp);
         let namespace = tp.namespace();
         tp.set_status(None);
-        //tp.metadata.managed_fields = None;
         let generation = tp.metadata.generation.clone();
         match IamRoleRef::try_from(tp.spec.role_arn.as_str()) {
             Ok(role_ref) => match role_ref.resolve(self.provider.clone()).await {
@@ -406,37 +410,30 @@ impl TrustPolicyStatementController {
                     };
                     if authorizations.len() > 0 {
                         tp.set_authorizations(Some(authorizations));
-                        // add finalizer and default values on spec
-                        match self.prepare(tp).await {
+                        match role_ref
+                            .add_trust_policy_statement(self.provider.clone(), &tp, &role)
+                            .await
+                        {
                             Ok(_) => {
-                                match role_ref
-                                    .add_trust_policy_statement(self.provider.clone(), &tp, &role)
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        let providers = tp.spec.providers.clone();
-                                        tp.set_providers(Some(providers));
-                                        tp.update_condition(Condition {
-                                            type_: "Ready".to_string(),
-                                            message: format!(""),
-                                            reason: "Success".to_string(),
-                                            status: "True".to_string(),
-                                            observed_generation: generation,
-                                            last_transition_time: None,
-                                        })
-                                    }
-                                    Err(e) => tp.update_condition(Condition {
-                                        type_: "Ready".to_string(),
-                                        message: format!("UpdateAssumeRolePolicy failed: {}", e),
-                                        reason: "UpdateAssumeRolePolicyFailed".to_string(),
-                                        status: "False".to_string(),
-                                        observed_generation: generation,
-                                        last_transition_time: None,
-                                    }),
-                                }
+                                let providers = tp.spec.providers.clone();
+                                tp.set_providers(Some(providers));
+                                tp.update_condition(Condition {
+                                    type_: "Ready".to_string(),
+                                    message: format!(""),
+                                    reason: "Success".to_string(),
+                                    status: "True".to_string(),
+                                    observed_generation: generation,
+                                    last_transition_time: None,
+                                })
                             }
-                            // If preparation failed, propagate error without modifying status.
-                            Err(e) => Err(e)?,
+                            Err(e) => tp.update_condition(Condition {
+                                type_: "Ready".to_string(),
+                                message: format!("UpdateAssumeRolePolicy failed: {}", e),
+                                reason: "UpdateAssumeRolePolicyFailed".to_string(),
+                                status: "False".to_string(),
+                                observed_generation: generation,
+                                last_transition_time: None,
+                            }),
                         }
                     } else {
                         tp.set_authorizations(None);
@@ -614,17 +611,7 @@ impl TrustPolicyStatementController {
         Ok(authorizations)
     }
 
-    async fn prepare(&self, tp: &mut ReconcileEvent) -> anyhow::Result<()> {
-        // Add finalizer
-        let mut finalizers = tp.metadata.finalizers.take().unwrap_or(vec![]);
-        finalizers.push(FINALIZER.to_string());
-        finalizers.dedup();
-        tp.metadata.finalizers = Some(finalizers);
-        //tp.metadata.managed_fields = None;
-        Ok(())
-    }
-
-    async fn remove_statement(&self, tp: &mut TrustPolicyStatement) -> anyhow::Result<()> {
+    async fn remove_statement(&self, tp: &TrustPolicyStatement) -> anyhow::Result<()> {
         let role_ref = IamRoleRef::try_from(tp.spec.role_arn.as_str());
         match role_ref {
             // If ARN is syntactically valid, remove trust policy from Role.
@@ -639,69 +626,93 @@ impl TrustPolicyStatementController {
         Ok(())
     }
 
-    async fn cleanup(&self, tp: &mut ReconcileEvent) -> anyhow::Result<RAction> {
-        debug!(
-            "cleanup TrustPolicyStatement {}/{}",
-            tp.namespace(),
+    async fn cleanup(&self, tp: Arc<TrustPolicyStatement>) -> anyhow::Result<RAction> {
+        let role_arn = tp.spec.role_arn.clone();
+        let object_id = format!(
+            "TrustPolicyStatement {}/{}",
+            tp.namespace().unwrap_or_else(|| "".to_string()),
             tp.name(),
         );
-        let action = RAction::requeue(Duration::from_secs(900));
-        //tp.metadata.managed_fields = None;
-        match self.remove_statement(tp).await {
+        let role_and_object_id = format!("AWS IAM Role {} for {}", role_arn, object_id,);
+        match self.remove_statement(tp.as_ref()).await {
             Ok(_) => {
-                // remove status
-                tp.status = None;
-                // remove finalizer
-                if let Some(finalizers) = &mut tp.metadata.finalizers {
-                    finalizers.retain(|v| v != FINALIZER);
-                }
+                debug!(
+                    "successfully removed all relevant trust policy statements from {}",
+                    role_and_object_id
+                );
+                // No need to update status or to reschedule reconiliation as TrustPolicyStatement
+                // object will be deleted.
+                Ok(RAction::await_change())
             }
             Err(e) => {
+                error!(
+                    "failed to remove trust policy statements from {}: {}",
+                    role_and_object_id, e
+                );
                 // patch status to make error visible
+                let mut tp = ReconcileEvent::new(tp);
                 tp.set_status(Some(format!("{}", e)));
+                if let Err(e) = tp.update(self.configuration.client.clone()).await {
+                    warn!("failed to update {}: {}", object_id, e);
+                };
+                Err(e)
             }
-        }
-        let response = tp.update(self.configuration.client.clone()).await;
-        match response {
-            Ok(_) => Ok(action),
-            Err(Error::Api(e)) if e.code == 409 => Ok(RAction::requeue(Duration::from_secs(5))),
-            Err(Error::Api(e)) if e.code == 404 => Ok(action),
-            Err(e) => Err(e)?,
         }
     }
 
     /// Controller triggers this whenever our main object or our children changed
-    async fn reconcile(tp: Arc<TrustPolicyStatement>, ctx: Ctx<Self>) -> Result<RAction, CrdError> {
+    async fn reconcile(
+        tp: Arc<TrustPolicyStatement>,
+        ctx: Ctx<Self>,
+    ) -> Result<RAction, finalizer::Error<CrdError>> {
+        let log_prefix = format!(
+            "reconciliation of TrustPolicyStatement {}/{} with AWS IAM Role ARN {}",
+            tp.namespace().unwrap_or_else(|| "".to_string()),
+            tp.name(),
+            tp.spec.role_arn,
+        );
         let start = Instant::now();
-        let mut event = ReconcileEvent::new(tp);
-        let result = if event.metadata.deletion_timestamp.is_some() {
-            // If TrustPolicyStatement has been deleted, remove trust policy statement from AWS IAM Role.
-            ctx.get_ref()
-                .cleanup(&mut event)
-                .await
-                .map_err(|e| CrdError::from(e))
-        } else {
-            info!(
-                "reconile TrustPolicyStatement {}/{} with AWS IAM Role ARN {}",
-                event.namespace(),
-                event.name(),
-                event.spec.role_arn,
-            );
-            ctx.get_ref()
-                .reconcile_trust_policy(&mut event)
-                .await
-                .map_err(|e| CrdError::from(e))
-        };
+        let result = finalizer::finalizer(
+            &ctx.get_ref().configuration.trust_policy_statment.clone(),
+            FINALIZER,
+            tp,
+            |e| Self::reconcile_with_finalizer(e, ctx),
+        )
+        .await;
         let duration = Instant::now() - start;
         histogram!(
             "reconcile_aws_iam_trustpolicy_duration_ns",
             duration.as_nanos() as f64
         );
+        match &result {
+            Ok(_) => error!("{} succeeded", log_prefix),
+            Err(e) => error!("{} failed: {}", log_prefix, e),
+        }
         result
     }
 
+    async fn reconcile_with_finalizer(
+        event: Event<TrustPolicyStatement>,
+        ctx: Ctx<Self>,
+    ) -> Result<RAction, CrdError> {
+        match event {
+            Event::Apply(tp) => ctx
+                .get_ref()
+                .reconcile_trust_policy(tp)
+                .await
+                .map_err(|e| CrdError::from(e)),
+            Event::Cleanup(tp) => {
+                // If TrustPolicyStatement has been deleted, remove trust policy statement from AWS IAM Role.
+                ctx.get_ref()
+                    .cleanup(tp)
+                    .await
+                    .map_err(|e| CrdError::from(e))
+            }
+        }
+    }
+
     /// The controller triggers this on reconcile errors
-    fn error_policy(_error: &CrdError, _ctx: Ctx<Self>) -> RAction {
+    fn error_policy(_error: &finalizer::Error<CrdError>, _ctx: Ctx<Self>) -> RAction {
         RAction::requeue(Duration::from_secs(10))
     }
 
