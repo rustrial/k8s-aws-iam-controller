@@ -7,10 +7,10 @@ use futures::{Future, StreamExt};
 use json_patch::diff;
 use kube::{
     api::{ListParams, Patch, PatchParams},
-    Api, Client, Error, ResourceExt,
+    Api, Client, CustomResourceExt, Error, ResourceExt,
 };
 use kube_runtime::{
-    controller::{Context as Ctx, Controller, ReconcilerAction},
+    controller::{Action as RAction, Context as Ctx, Controller},
     reflector::{ObjectRef, Store},
 };
 use lazy_static::lazy_static;
@@ -29,7 +29,7 @@ use rustrial_k8s_aws_iam_apis::{
     Authorization, Condition, Provider, RoleUsagePolicy, RoleUsagePolicySpec, TrustPolicyStatement,
     API_GROUP,
 };
-use std::{collections::HashMap, convert::TryFrom, ops::DerefMut, time::Instant};
+use std::{collections::HashMap, convert::TryFrom, ops::DerefMut, sync::Arc, time::Instant};
 use tokio::time::Duration;
 
 const FINALIZER: &'static str = API_GROUP;
@@ -249,7 +249,7 @@ pub(crate) struct TrustPolicyStatementController {
 }
 
 struct ReconcileEvent {
-    original: TrustPolicyStatement,
+    original: Arc<TrustPolicyStatement>,
     pub modified: TrustPolicyStatement,
 }
 
@@ -268,8 +268,8 @@ impl DerefMut for ReconcileEvent {
 }
 
 impl ReconcileEvent {
-    pub fn new(original: TrustPolicyStatement) -> Self {
-        let modified = original.clone();
+    pub fn new(original: Arc<TrustPolicyStatement>) -> Self {
+        let modified = original.as_ref().clone();
         Self { original, modified }
     }
 
@@ -290,7 +290,7 @@ impl ReconcileEvent {
         // capture copy of modified for status diff.
         let modified = self.modified.clone();
         let spec_patch = {
-            let mut ospec = self.original.clone();
+            let mut ospec = self.original.as_ref().clone();
             let mut mspec = self.modified.clone();
             ospec.status = None;
             mspec.status = None;
@@ -328,7 +328,7 @@ impl ReconcileEvent {
             );
             match response {
                 Ok(new) => {
-                    self.original = new.clone();
+                    self.original = Arc::new(new.clone());
                     self.modified = new;
                 }
                 Err(e) => Err(e)?,
@@ -343,7 +343,8 @@ impl ReconcileEvent {
                 None
             } else {
                 Some(diff(
-                    &serde_json::to_value(&self.original).map_err(|e| Error::SerdeError(e))?,
+                    &serde_json::to_value(self.original.as_ref())
+                        .map_err(|e| Error::SerdeError(e))?,
                     &serde_json::to_value(&modified).map_err(|e| Error::SerdeError(e))?,
                 ))
             }
@@ -371,7 +372,7 @@ impl ReconcileEvent {
             );
             match response {
                 Ok(new) => {
-                    self.original = new.clone();
+                    self.original = Arc::new(new.clone());
                     self.modified = new;
                 }
                 Err(e) => Err(e)?,
@@ -382,10 +383,7 @@ impl ReconcileEvent {
 }
 
 impl TrustPolicyStatementController {
-    async fn reconcile_trust_policy(
-        &self,
-        tp: &mut ReconcileEvent,
-    ) -> anyhow::Result<ReconcilerAction> {
+    async fn reconcile_trust_policy(&self, tp: &mut ReconcileEvent) -> anyhow::Result<RAction> {
         let namespace = tp.namespace();
         tp.set_status(None);
         //tp.metadata.managed_fields = None;
@@ -496,15 +494,11 @@ impl TrustPolicyStatementController {
                 last_transition_time: None,
             }),
         };
-        let action = ReconcilerAction {
-            requeue_after: Some(Duration::from_secs(900)),
-        };
+        let action = RAction::requeue(Duration::from_secs(900));
         let response = tp.update(self.configuration.client.clone()).await;
         match response {
             Ok(_) => Ok(action),
-            Err(Error::Api(e)) if e.code == 409 => Ok(ReconcilerAction {
-                requeue_after: Some(Duration::from_secs(5)),
-            }),
+            Err(Error::Api(e)) if e.code == 409 => Ok(RAction::requeue(Duration::from_secs(5))),
             Err(Error::Api(e)) if e.code == 404 => Ok(action),
             Err(e) => Err(e)?,
         }
@@ -599,7 +593,7 @@ impl TrustPolicyStatementController {
         let available_tags = self.get_role_tags(role).await?;
         let authorizations = cache
             .iter()
-            .filter(|p: &&RoleUsagePolicy| {
+            .filter(|p| {
                 Self::matches(
                     &p.spec,
                     namespace.as_str(),
@@ -612,7 +606,7 @@ impl TrustPolicyStatementController {
                 )
             })
             .map(|v| Authorization {
-                kind: v.kind.clone(),
+                kind: RoleUsagePolicy::api_resource().kind,
                 name: v.name(),
                 namespace: v.namespace(),
             })
@@ -645,15 +639,13 @@ impl TrustPolicyStatementController {
         Ok(())
     }
 
-    async fn cleanup(&self, tp: &mut ReconcileEvent) -> anyhow::Result<ReconcilerAction> {
+    async fn cleanup(&self, tp: &mut ReconcileEvent) -> anyhow::Result<RAction> {
         debug!(
             "cleanup TrustPolicyStatement {}/{}",
             tp.namespace(),
             tp.name(),
         );
-        let action = ReconcilerAction {
-            requeue_after: Some(Duration::from_secs(900)),
-        };
+        let action = RAction::requeue(Duration::from_secs(900));
         //tp.metadata.managed_fields = None;
         match self.remove_statement(tp).await {
             Ok(_) => {
@@ -672,19 +664,14 @@ impl TrustPolicyStatementController {
         let response = tp.update(self.configuration.client.clone()).await;
         match response {
             Ok(_) => Ok(action),
-            Err(Error::Api(e)) if e.code == 409 => Ok(ReconcilerAction {
-                requeue_after: Some(Duration::from_secs(5)),
-            }),
+            Err(Error::Api(e)) if e.code == 409 => Ok(RAction::requeue(Duration::from_secs(5))),
             Err(Error::Api(e)) if e.code == 404 => Ok(action),
             Err(e) => Err(e)?,
         }
     }
 
     /// Controller triggers this whenever our main object or our children changed
-    async fn reconcile(
-        tp: TrustPolicyStatement,
-        ctx: Ctx<Self>,
-    ) -> Result<ReconcilerAction, CrdError> {
+    async fn reconcile(tp: Arc<TrustPolicyStatement>, ctx: Ctx<Self>) -> Result<RAction, CrdError> {
         let start = Instant::now();
         let mut event = ReconcileEvent::new(tp);
         let result = if event.metadata.deletion_timestamp.is_some() {
@@ -714,10 +701,8 @@ impl TrustPolicyStatementController {
     }
 
     /// The controller triggers this on reconcile errors
-    fn error_policy(_error: &CrdError, _ctx: Ctx<Self>) -> ReconcilerAction {
-        ReconcilerAction {
-            requeue_after: Some(Duration::from_secs(10)),
-        }
+    fn error_policy(_error: &CrdError, _ctx: Ctx<Self>) -> RAction {
+        RAction::requeue(Duration::from_secs(10))
     }
 
     fn might_affect(p: &RoleUsagePolicy, tp: &TrustPolicyStatement) -> bool {
@@ -756,7 +741,7 @@ impl TrustPolicyStatementController {
             .state()
             .into_iter()
             .filter(|sa| Self::might_affect(&policy, sa))
-            .map(|sa| ObjectRef::from_obj(&sa))
+            .map(|sa| ObjectRef::from_obj(sa.as_ref()))
             .collect();
         info!(
             "RoleUsagePolicy change detected: {:?} which might affect {:?}",

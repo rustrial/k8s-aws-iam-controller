@@ -10,17 +10,16 @@ use kube::{
     Api, Error, ResourceExt,
 };
 use kube_runtime::{
-    controller::{Context as Ctx, Controller, ReconcilerAction},
+    controller::{Action, Context as Ctx, Controller},
     reflector::Store,
 };
 use log::info;
 use metrics::{counter, histogram};
 use rustrial_k8s_aws_iam_apis::{
-    Provider, TrustPolicyStatement, TrustPolicyStatementSpec, API_VERSION,
-    TRUST_POLICY_STATEMENT_LABEL,
+    Provider, TrustPolicyStatement, TrustPolicyStatementSpec, TRUST_POLICY_STATEMENT_LABEL,
 };
 use sha2::Digest;
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 use tokio::time::Duration;
 
 const ROLE_ANNOTATION: &'static str = "eks.amazonaws.com/role-arn";
@@ -47,7 +46,7 @@ impl ServiceAccountController {
         &self,
         sa: &ServiceAccount,
         role_arn: &str,
-    ) -> anyhow::Result<ReconcilerAction> {
+    ) -> anyhow::Result<Action> {
         let tp = self.get_trust_policy_statement(sa, role_arn).await?;
         let api = if let Some(ns) = tp.namespace() {
             Api::<TrustPolicyStatement>::namespaced(self.configuration.client.clone(), ns.as_str())
@@ -66,9 +65,7 @@ impl ServiceAccountController {
             &Patch::Apply(&object),
         )
         .await?;
-        Ok(ReconcilerAction {
-            requeue_after: Some(Duration::from_secs(300)),
-        })
+        Ok(Action::requeue(Duration::from_secs(300)))
     }
 
     async fn get_trust_policy_statement(
@@ -106,8 +103,6 @@ impl ServiceAccountController {
         };
         let tp: anyhow::Result<TrustPolicyStatement> = match api.get(sa.name().as_str()).await {
             Err(Error::Api(e)) if e.code == 404 || e.code == 409 => Ok(TrustPolicyStatement {
-                api_version: API_VERSION.to_string(),
-                kind: "TrustPolicyStatement".to_string(),
                 metadata: ObjectMeta {
                     name: Some(sa.name()),
                     namespace: sa.namespace(),
@@ -132,7 +127,7 @@ impl ServiceAccountController {
         Ok(tp)
     }
 
-    async fn cleanup(&self, sa: &ServiceAccount) -> anyhow::Result<ReconcilerAction> {
+    async fn cleanup(&self, sa: &ServiceAccount) -> anyhow::Result<Action> {
         debug!(
             "cleanup ServiceAccount {}/{}",
             sa.namespace().as_deref().unwrap_or(""),
@@ -143,9 +138,7 @@ impl ServiceAccountController {
         } else {
             Api::<TrustPolicyStatement>::all(self.configuration.client.clone())
         };
-        let action = ReconcilerAction {
-            requeue_after: Some(Duration::from_secs(300)),
-        };
+        let action = Action::requeue(Duration::from_secs(300));
         let response = api
             .delete(sa.name().as_str(), &DeleteParams::default())
             .await;
@@ -192,7 +185,7 @@ impl ServiceAccountController {
     }
 
     /// Controller triggers this whenever our main object or our children changed
-    async fn reconcile(sa: ServiceAccount, ctx: Ctx<Self>) -> Result<ReconcilerAction, CrdError> {
+    async fn reconcile(sa: Arc<ServiceAccount>, ctx: Ctx<Self>) -> Result<Action, CrdError> {
         let start = Instant::now();
         // ServiceAccounts can opt-out from this controller.
         let opted_out = Self::has_label_or_annotation(
@@ -228,9 +221,7 @@ impl ServiceAccountController {
                     .map_err(|e| CrdError::from(e))
             }
         } else {
-            Ok(ReconcilerAction {
-                requeue_after: Some(Duration::from_secs(300)),
-            })
+            Ok(Action::requeue(Duration::from_secs(300)))
         };
 
         let duration = Instant::now() - start;
@@ -242,10 +233,8 @@ impl ServiceAccountController {
     }
 
     /// The controller triggers this on reconcile errors
-    fn error_policy(_error: &CrdError, _ctx: Ctx<Self>) -> ReconcilerAction {
-        ReconcilerAction {
-            requeue_after: Some(Duration::from_secs(10)),
-        }
+    fn error_policy(_error: &CrdError, _ctx: Ctx<Self>) -> Action {
+        Action::requeue(Duration::from_secs(10))
     }
 
     pub fn start(self) -> (Store<ServiceAccount>, impl Future<Output = ()>) {
