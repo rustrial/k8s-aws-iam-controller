@@ -1,6 +1,6 @@
-use std::{collections::HashMap, iter::FromIterator};
-
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::iter::FromIterator;
 
 /// https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_grammar.html
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -415,9 +415,9 @@ pub enum ConditionValues {
     One(ScalarValue),
     Many(Vec<ScalarValue>),
 }
-pub type ConditionMap = HashMap<String, ConditionValues>;
+pub type ConditionMap = IndexMap<String, ConditionValues>;
 
-pub type Conditions = HashMap<String, ConditionMap>;
+pub type Conditions = IndexMap<String, ConditionMap>;
 
 ///
 /// ```
@@ -489,7 +489,7 @@ pub struct PolicyDocument {
     /// Enable round-trip forward compatibility, by capturing all extra
     /// attributes into a Map.
     #[serde(flatten)]
-    pub _extra: HashMap<String, serde_json::Value>,
+    pub extra_attributes: IndexMap<String, serde_json::Value>,
 }
 
 impl Default for PolicyDocument {
@@ -498,7 +498,7 @@ impl Default for PolicyDocument {
             id: Default::default(),
             version: None,
             statement: Default::default(),
-            _extra: HashMap::new(),
+            extra_attributes: Default::default(),
         }
     }
 }
@@ -728,7 +728,8 @@ mod tests {
         c.insert("StringEquals".to_string(), a);
         let txt = serde_json::to_string(&c).unwrap();
         assert_eq!(r#"{"StringEquals":{"key":"value"}}"#, txt);
-        assert_eq!(c, serde_json::from_str(txt.as_str()).unwrap());
+        let parsed: Conditions = serde_json::from_str(txt.as_str()).unwrap();
+        assert_eq!(c, parsed);
         Ok(())
     }
 
@@ -743,7 +744,8 @@ mod tests {
         c.insert("StringEquals".to_string(), a);
         let txt = serde_json::to_string(&c).unwrap();
         assert_eq!(r#"{"StringEquals":{"key":["value"]}}"#, txt);
-        assert_eq!(c, serde_json::from_str(txt.as_str()).unwrap());
+        let parsed: Conditions = serde_json::from_str(txt.as_str()).unwrap();
+        assert_eq!(c, parsed);
         Ok(())
     }
 

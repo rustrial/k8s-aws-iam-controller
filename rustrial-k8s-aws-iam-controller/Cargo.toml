@@ -38,3 +38,4 @@ regex = "1.5.5"
 lazy_static = "1.4.0"
 async-trait = "0.1.53"
 indoc = "1.0.6"
+indexmap = { version = "1.8.1", features = ["serde-1"] }
