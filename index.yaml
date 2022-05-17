@@ -4,6 +4,18 @@ entries:
   - annotations:
       artifacthub.io/license: Unlicense OR MIT OR Apache-2.0
     apiVersion: v2
+    appVersion: 0.1.4
+    created: "2022-05-17T09:58:21.822419955Z"
+    description: Kubernetes operator which update AWS IAM TrustPolicies.
+    digest: 62efdc136b4a785b75eec38b25474e2e67f80ca2021001f66ce176217bdb4a2b
+    name: k8s-aws-iam-controller
+    type: application
+    urls:
+    - https://github.com/rustrial/k8s-aws-iam-controller/releases/download/k8s-aws-iam-controller-0.1.4/k8s-aws-iam-controller-0.1.4.tgz
+    version: 0.1.4
+  - annotations:
+      artifacthub.io/license: Unlicense OR MIT OR Apache-2.0
+    apiVersion: v2
     appVersion: 0.1.3
     created: "2021-11-22T16:35:19.692963191Z"
     description: Kubernetes operator which update AWS IAM TrustPolicies.
@@ -61,4 +73,4 @@ entries:
     urls:
     - https://github.com/rustrial/k8s-aws-iam-controller/releases/download/k8s-aws-iam-controller-0.0.1/k8s-aws-iam-controller-0.0.1.tgz
     version: 0.0.1
-generated: "2021-11-22T16:35:19.692984892Z"
+generated: "2022-05-17T09:58:21.822548255Z"
