@@ -675,24 +675,30 @@ impl TrustPolicyStatementController {
             tp.name(),
             tp.spec.role_arn,
         );
-        let start = Instant::now();
-        let result = finalizer::finalizer(
-            &ctx.get_ref().configuration.trust_policy_statment.clone(),
-            FINALIZER,
-            tp,
-            |e| Self::reconcile_with_finalizer(e, ctx),
-        )
-        .await;
-        let duration = Instant::now() - start;
-        histogram!(
-            "reconcile_aws_iam_trustpolicy_duration_ns",
-            duration.as_nanos() as f64
-        );
-        match &result {
-            Ok(_) => info!("{} succeeded", log_prefix),
-            Err(e) => error!("{} failed: {}", log_prefix, e),
+        if let Some(ns) = tp.namespace().as_deref() {
+            let api = Api::<TrustPolicyStatement>::namespaced(
+                ctx.get_ref().configuration.client.clone(),
+                ns,
+            );
+            let start = Instant::now();
+            let result = finalizer::finalizer(&api, FINALIZER, tp, |e| {
+                Self::reconcile_with_finalizer(e, ctx)
+            })
+            .await;
+            let duration = Instant::now() - start;
+            histogram!(
+                "reconcile_aws_iam_trustpolicy_duration_ns",
+                duration.as_nanos() as f64
+            );
+            match &result {
+                Ok(_) => info!("{} succeeded", log_prefix),
+                Err(e) => error!("{} failed: {}", log_prefix, e),
+            }
+            result
+        } else {
+            let msg = format!("{} failed: object has no namespace", log_prefix);
+            Err(finalizer::Error::ApplyFailed(CrdError::Any(msg)))
         }
-        result
     }
 
     async fn reconcile_with_finalizer(
