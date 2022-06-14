@@ -1,4 +1,4 @@
-ARG ALPINE_VERSION=3.15.4
+ARG ALPINE_VERSION=3.16.0
 
 FROM alpine:$ALPINE_VERSION as builder
 
@@ -16,7 +16,7 @@ COPY . /workdir/
 # https://rust-lang.github.io/rfcs/1721-crt-static.html
 ENV RUSTFLAGS="-C target-feature=-crt-static"
 
-RUN cargo build --release
+RUN cargo build --release -vvv
 
 FROM alpine:$ALPINE_VERSION as staging
 
