@@ -12,7 +12,7 @@ use kube::{
     Api, Client, CustomResourceExt, Error, ResourceExt,
 };
 use kube_runtime::{
-    controller::{Action as RAction, Context as Ctx, Controller},
+    controller::{Action as RAction, Controller},
     finalizer::{self, Event},
     reflector::{ObjectRef, Store},
 };
@@ -85,8 +85,8 @@ impl IamRoleRef {
                 }
             }
             // Role not found.
-            Err(SdkError::<GetRoleError, _>::ServiceError { err, .. })
-                if err.is_no_such_entity_exception() =>
+            Err(SdkError::<GetRoleError, _>::ServiceError(err))
+                if err.err().is_no_such_entity_exception() =>
             {
                 Ok(None)
             }
@@ -311,11 +311,12 @@ impl ReconcileEvent {
             let patch_txt = serde_json::to_string(&patch).unwrap();
             let response = api
                 .patch(
-                    self.original.name().as_str(),
+                    self.original.name_any().as_str(),
                     &PatchParams {
                         field_manager: Some("iam.aws.rustrial.org".to_string()),
                         dry_run: false,
                         force: false,
+                        field_validation: None,
                     },
                     &Patch::<json_patch::Patch>::Json(patch),
                 )
@@ -323,7 +324,7 @@ impl ReconcileEvent {
             info!(
                 "Patch object {}/{} ({:?}) with {} -> {:?}",
                 namespace,
-                self.original.name(),
+                self.original.name_any(),
                 self.original.resource_version(),
                 patch_txt,
                 response
@@ -355,11 +356,12 @@ impl ReconcileEvent {
             let patch_txt = serde_json::to_string(&patch).unwrap();
             let response = api
                 .patch_status(
-                    self.original.name().as_str(),
+                    self.original.name_any().as_str(),
                     &PatchParams {
                         field_manager: Some("iam.aws.rustrial.org".to_string()),
                         dry_run: false,
                         force: false,
+                        field_validation: None,
                     },
                     &Patch::<json_patch::Patch>::Json(patch),
                 )
@@ -367,7 +369,7 @@ impl ReconcileEvent {
             info!(
                 "Patch object status {}/{} ({:?}) with {} -> {:?}",
                 namespace,
-                self.original.name(),
+                self.original.name_any(),
                 self.original.resource_version(),
                 patch_txt,
                 response
@@ -403,7 +405,7 @@ impl TrustPolicyStatementController {
                             error!(
                                 "Error while analysing authorization for {}/{}: {}",
                                 namespace,
-                                tp.name(),
+                                tp.name_any(),
                                 e
                             );
                             vec![]
@@ -444,7 +446,7 @@ impl TrustPolicyStatementController {
                         {
                             error!(
                                 "Error while removing TrustPolicy Statement of {}/{} from IAM Role {}: {}",
-                                namespace, tp.name(), role.arn.as_deref().unwrap_or(""), e
+                                namespace, tp.name_any(), role.arn.as_deref().unwrap_or(""), e
                             );
                             tp.set_status(Some(format!(
                                 "Failed to remove TrustPolicy Statement from IAM Role: {}",
@@ -608,7 +610,7 @@ impl TrustPolicyStatementController {
             })
             .map(|v| Authorization {
                 kind: RoleUsagePolicy::api_resource().kind,
-                name: v.name(),
+                name: v.name_any(),
                 namespace: v.namespace(),
             })
             .collect();
@@ -635,7 +637,7 @@ impl TrustPolicyStatementController {
         let object_id = format!(
             "TrustPolicyStatement {}/{}",
             tp.namespace().unwrap_or_else(|| "".to_string()),
-            tp.name(),
+            tp.name_any(),
         );
         let role_and_object_id = format!("AWS IAM Role {} for {}", role_arn, object_id,);
         match self.remove_statement(tp.as_ref()).await {
@@ -667,19 +669,16 @@ impl TrustPolicyStatementController {
     /// Controller triggers this whenever our main object or our children changed
     async fn reconcile(
         tp: Arc<TrustPolicyStatement>,
-        ctx: Ctx<Self>,
+        ctx: Arc<Self>,
     ) -> Result<RAction, finalizer::Error<CrdError>> {
         let log_prefix = format!(
             "reconciliation of TrustPolicyStatement {}/{} with AWS IAM Role ARN {}",
             tp.namespace().unwrap_or_else(|| "".to_string()),
-            tp.name(),
+            tp.name_any(),
             tp.spec.role_arn,
         );
         if let Some(ns) = tp.namespace().as_deref() {
-            let api = Api::<TrustPolicyStatement>::namespaced(
-                ctx.get_ref().configuration.client.clone(),
-                ns,
-            );
+            let api = Api::<TrustPolicyStatement>::namespaced(ctx.configuration.client.clone(), ns);
             let start = Instant::now();
             let result = finalizer::finalizer(&api, FINALIZER, tp, |e| {
                 Self::reconcile_with_finalizer(e, ctx)
@@ -703,26 +702,26 @@ impl TrustPolicyStatementController {
 
     async fn reconcile_with_finalizer(
         event: Event<TrustPolicyStatement>,
-        ctx: Ctx<Self>,
+        ctx: Arc<Self>,
     ) -> Result<RAction, CrdError> {
         match event {
             Event::Apply(tp) => ctx
-                .get_ref()
                 .reconcile_trust_policy(tp)
                 .await
                 .map_err(|e| CrdError::from(e)),
             Event::Cleanup(tp) => {
                 // If TrustPolicyStatement has been deleted, remove trust policy statement from AWS IAM Role.
-                ctx.get_ref()
-                    .cleanup(tp)
-                    .await
-                    .map_err(|e| CrdError::from(e))
+                ctx.cleanup(tp).await.map_err(|e| CrdError::from(e))
             }
         }
     }
 
     /// The controller triggers this on reconcile errors
-    fn error_policy(_error: &finalizer::Error<CrdError>, _ctx: Ctx<Self>) -> RAction {
+    fn error_policy(
+        _tps: Arc<TrustPolicyStatement>,
+        _error: &finalizer::Error<CrdError>,
+        _ctx: Arc<Self>,
+    ) -> RAction {
         RAction::requeue(Duration::from_secs(10))
     }
 
@@ -742,7 +741,7 @@ impl TrustPolicyStatementController {
                     .find(|a: &&Authorization| {
                         a.kind == "RoleUsagePolicy"
                             && a.namespace == p.namespace()
-                            && a.name == p.name()
+                            && a.name == p.name_any()
                     })
                     .is_some();
                 matches || currently_authorized_by
@@ -784,7 +783,7 @@ impl TrustPolicyStatementController {
                 ListParams::default(),
                 mapper,
             )
-            .run(Self::reconcile, Self::error_policy, Ctx::new(self))
+            .run(Self::reconcile, Self::error_policy, Arc::new(self))
             .for_each(|res| async move {
                 match res {
                     Ok(o) => {

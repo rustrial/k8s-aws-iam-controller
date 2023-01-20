@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate log;
-use aws_types::{credentials::ProvideCredentials, SdkConfig};
+use aws_credential_types::provider::ProvideCredentials;
+use aws_types::SdkConfig;
 use futures::{FutureExt, StreamExt};
 use indoc::indoc;
 use k8s_openapi::api::core::v1::ServiceAccount;

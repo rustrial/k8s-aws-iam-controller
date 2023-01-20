@@ -10,7 +10,7 @@ use kube::{
     Api, Error, ResourceExt,
 };
 use kube_runtime::{
-    controller::{Action, Context as Ctx, Controller},
+    controller::{Action, Controller},
     reflector::Store,
 };
 use log::info;
@@ -53,14 +53,16 @@ impl ServiceAccountController {
         } else {
             Api::<TrustPolicyStatement>::all(self.configuration.client.clone())
         };
+
         let object =
             serde_json::to_value(&tp).context("Error while serializing TrustPolicyStatement")?;
         api.patch(
-            tp.name().as_str(),
+            tp.name_any().as_str(),
             &PatchParams {
                 field_manager: Some("iam.aws.rustrial.org".to_string()),
                 dry_run: false,
                 force: true,
+                field_validation: None,
             },
             &Patch::Apply(&object),
         )
@@ -87,7 +89,7 @@ impl ServiceAccountController {
             digester.update(b":");
             digester.update(sa.namespace().as_deref().unwrap_or("").as_bytes());
             digester.update(b":");
-            digester.update(sa.name().as_bytes());
+            digester.update(sa.name_any().as_bytes());
             let digest = digester.finalize();
             // Make sure SID starts and ends with non-numeric characters.
             let statement_sid = format!("EKS{:x}X", digest);
@@ -97,14 +99,14 @@ impl ServiceAccountController {
             });
         }
         let spec = TrustPolicyStatementSpec {
-            service_account_name: sa.name(),
+            service_account_name: sa.name_any(),
             role_arn: role_arn.to_string(),
             providers,
         };
-        let tp: anyhow::Result<TrustPolicyStatement> = match api.get(sa.name().as_str()).await {
+        let tp: anyhow::Result<TrustPolicyStatement> = match api.get(sa.name_any().as_str()).await {
             Err(Error::Api(e)) if e.code == 404 || e.code == 409 => Ok(TrustPolicyStatement {
                 metadata: ObjectMeta {
-                    name: Some(sa.name()),
+                    name: Some(sa.name_any()),
                     namespace: sa.namespace(),
                     ..Default::default()
                 },
@@ -120,7 +122,7 @@ impl ServiceAccountController {
             block_owner_deletion: Some(false),
             controller: Some(true),
             kind: "ServiceAccount".to_string(),
-            name: sa.name(),
+            name: sa.name_any(),
             uid: sa.metadata.uid.clone().unwrap_or("".to_string()),
         }]);
         tp.spec = spec;
@@ -131,7 +133,7 @@ impl ServiceAccountController {
         debug!(
             "cleanup ServiceAccount {}/{}",
             sa.namespace().as_deref().unwrap_or(""),
-            sa.name(),
+            sa.name_any(),
         );
         let api = if let Some(ns) = sa.namespace() {
             Api::<TrustPolicyStatement>::namespaced(self.configuration.client.clone(), ns.as_str())
@@ -140,12 +142,12 @@ impl ServiceAccountController {
         };
         let action = Action::requeue(Duration::from_secs(300));
         let response = api
-            .delete(sa.name().as_str(), &DeleteParams::default())
+            .delete(sa.name_any().as_str(), &DeleteParams::default())
             .await;
         trace!(
             "delete TrustPolicyStatement {}/{} -> {:?}",
             sa.namespace().as_deref().unwrap_or(""),
-            sa.name(),
+            sa.name_any(),
             response
         );
         match response {
@@ -185,7 +187,7 @@ impl ServiceAccountController {
     }
 
     /// Controller triggers this whenever our main object or our children changed
-    async fn reconcile(sa: Arc<ServiceAccount>, ctx: Ctx<Self>) -> Result<Action, CrdError> {
+    async fn reconcile(sa: Arc<ServiceAccount>, ctx: Arc<Self>) -> Result<Action, CrdError> {
         let start = Instant::now();
         // ServiceAccounts can opt-out from this controller.
         let opted_out = Self::has_label_or_annotation(
@@ -197,28 +199,21 @@ impl ServiceAccountController {
         let result = if !opted_out {
             if sa.metadata.deletion_timestamp.is_some() {
                 // If ServiceAccount has been deleted, delete its TrustPolicyStatement
-                ctx.get_ref()
-                    .cleanup(&sa)
-                    .await
-                    .map_err(|e| CrdError::from(e))
+                ctx.cleanup(&sa).await.map_err(|e| CrdError::from(e))
             } else if let Some(role_arn) = Self::get_iam_role(&sa) {
                 // If a ServiceAccount has a AWS IAM Role annotation, make sure it has a TrustPolicyStatement.
                 debug!(
                     "reconile ServiceAccount {}/{} with AWS IAM Role ARN {}",
                     sa.namespace().as_deref().unwrap_or(""),
-                    sa.name(),
+                    sa.name_any(),
                     role_arn
                 );
-                ctx.get_ref()
-                    .reconcile_annotated_sa(&sa, role_arn.as_str())
+                ctx.reconcile_annotated_sa(&sa, role_arn.as_str())
                     .await
                     .map_err(|e| CrdError::from(e))
             } else {
                 // If ServiceAccount has no AWS IAM Role annotation, delete its TrustPolicyStatement
-                ctx.get_ref()
-                    .cleanup(&sa)
-                    .await
-                    .map_err(|e| CrdError::from(e))
+                ctx.cleanup(&sa).await.map_err(|e| CrdError::from(e))
             }
         } else {
             Ok(Action::requeue(Duration::from_secs(300)))
@@ -233,7 +228,7 @@ impl ServiceAccountController {
     }
 
     /// The controller triggers this on reconcile errors
-    fn error_policy(_error: &CrdError, _ctx: Ctx<Self>) -> Action {
+    fn error_policy(_sa: Arc<ServiceAccount>, _error: &CrdError, _ctx: Arc<Self>) -> Action {
         Action::requeue(Duration::from_secs(10))
     }
 
@@ -248,7 +243,7 @@ impl ServiceAccountController {
                 self.configuration.trust_policy_statment.clone(),
                 ListParams::default(),
             )
-            .run(Self::reconcile, Self::error_policy, Ctx::new(self))
+            .run(Self::reconcile, Self::error_policy, Arc::new(self))
             .for_each(|res| async move {
                 match res {
                     Ok(o) => {
