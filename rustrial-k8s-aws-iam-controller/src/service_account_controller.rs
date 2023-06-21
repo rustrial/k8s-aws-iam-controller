@@ -6,12 +6,13 @@ use k8s_openapi::{
     apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference},
 };
 use kube::{
-    api::{DeleteParams, ListParams, Patch, PatchParams},
+    api::{DeleteParams, Patch, PatchParams},
     Api, Error, ResourceExt,
 };
 use kube_runtime::{
     controller::{Action, Controller},
     reflector::Store,
+    watcher::Config,
 };
 use log::info;
 use metrics::{counter, histogram};
@@ -235,13 +236,13 @@ impl ServiceAccountController {
     pub fn start(self) -> (Store<ServiceAccount>, impl Future<Output = ()>) {
         let controller = Controller::new(
             self.configuration.service_account.clone(),
-            ListParams::default(),
+            Config::default(),
         );
         let store = controller.store();
         let service_account_controller = controller
             .owns(
                 self.configuration.trust_policy_statment.clone(),
-                ListParams::default(),
+                Config::default(),
             )
             .run(Self::reconcile, Self::error_policy, Arc::new(self))
             .for_each(|res| async move {

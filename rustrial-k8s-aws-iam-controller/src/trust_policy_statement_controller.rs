@@ -3,18 +3,20 @@ use crate::{
     iam_policy::{Action, ConditionMap, Conditions, Effect, PolicyDocument, Principal, Statement},
     Configuration, CrdError,
 };
-use aws_sdk_iam::{error::GetRoleError, model::Role, types::SdkError};
+use aws_sdk_iam::{operation::get_role::GetRoleError, types::Role};
+use aws_sdk_sts::error::SdkError;
 use aws_types::SdkConfig;
 use futures::{Future, StreamExt};
 use json_patch::diff;
 use kube::{
-    api::{ListParams, Patch, PatchParams},
+    api::{Patch, PatchParams},
     Api, Client, CustomResourceExt, Error, ResourceExt,
 };
 use kube_runtime::{
     controller::{Action as RAction, Controller},
     finalizer::{self, Event},
     reflector::{ObjectRef, Store},
+    watcher::Config,
 };
 use lazy_static::lazy_static;
 use log::{error, info, warn};
@@ -773,14 +775,14 @@ impl TrustPolicyStatementController {
     pub fn start(self) -> impl Future<Output = ()> {
         let controller = Controller::new(
             self.configuration.trust_policy_statment.clone(),
-            ListParams::default(),
+            Config::default(),
         );
         let cache = controller.store();
         let mapper = move |policy: RoleUsagePolicy| Self::mapper_impl(policy, &cache);
         let controller = controller
             .watches(
                 self.configuration.role_usage_policy.clone(),
-                ListParams::default(),
+                Config::default(),
                 mapper,
             )
             .run(Self::reconcile, Self::error_policy, Arc::new(self))

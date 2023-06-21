@@ -5,7 +5,7 @@ use aws_types::SdkConfig;
 use futures::{FutureExt, StreamExt};
 use indoc::indoc;
 use k8s_openapi::api::core::v1::ServiceAccount;
-use kube::{api::ListParams, Api, Client, Config};
+use kube::{Api, Client, Config};
 use kube_runtime::{reflector, reflector::store::Writer, watcher};
 use log::{error, info, warn};
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -172,7 +172,7 @@ async fn main() -> anyhow::Result<()> {
         Api::<RoleUsagePolicy>::namespaced(client.clone(), storage_namespace.as_str());
     // Create RoleUsagePolicy Index (store & reflector)
     let (useage_policy_reflector_loop, useage_policy_store) = {
-        let useage_policy_watcher = watcher(role_usage_policy.clone(), ListParams::default());
+        let useage_policy_watcher = watcher(role_usage_policy.clone(), watcher::Config::default());
         let useage_policy_writer = Writer::<RoleUsagePolicy>::default();
         let useage_policy_store = useage_policy_writer.as_reader();
         let useage_policy_reflector = reflector(useage_policy_writer, useage_policy_watcher);
