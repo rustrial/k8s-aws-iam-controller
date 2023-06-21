@@ -2,7 +2,7 @@ use crate::{
     env_var,
     iam_policy::{PolicyDocument, Principal, PrincipalKind, Values},
 };
-use aws_sdk_iam::model::Role;
+use aws_sdk_iam::types::Role;
 use aws_types::SdkConfig;
 use lazy_static::lazy_static;
 use log::warn;
