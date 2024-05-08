@@ -54,7 +54,7 @@ impl GarbageCollector {
         loop {
             let roles = client.list_roles().set_marker(marker).send().await?;
             marker = roles.marker;
-            let roles = roles.roles.unwrap_or_default();
+            let roles = roles.roles;
             scanned_roles += roles.len();
             for role in roles {
                 if let Some(raw_policy_document) = &role.assume_role_policy_document {
@@ -77,7 +77,7 @@ impl GarbageCollector {
                                             if let (Some(captures), Some(role_captures)) = (
                                                 PROVIDER_ARN.captures(provider_arn.as_str()),
                                                 crate::trust_policy_statement_controller::ROLE_ARN
-                                                    .captures(role.arn.as_deref().unwrap_or("")),
+                                                    .captures(&role.arn),
                                             ) {
                                                 let same_account = captures[1] == role_captures[1];
                                                 if same_account
@@ -108,9 +108,7 @@ impl GarbageCollector {
                         Err(e) => {
                             warn!(
                                 "Error parsing Trust Policy of IAM Role {}: {} {}",
-                                role.arn.as_deref().unwrap_or(""),
-                                e,
-                                raw_policy_document
+                                role.arn, e, raw_policy_document
                             );
                         }
                     }
@@ -154,13 +152,11 @@ impl GarbageCollector {
                         Ok(txt) => {
                             info!(
                                 "Update Trust Policy of Role {}, removing {} statements -> {}",
-                                candidate.role.arn.as_deref().unwrap_or(""),
-                                removed_statements,
-                                txt
+                                candidate.role.arn, removed_statements, txt
                             );
                             let response = client
                                 .update_assume_role_policy()
-                                .set_role_name(candidate.role.role_name.clone())
+                                .set_role_name(Some(candidate.role.role_name.clone()))
                                 .policy_document(txt)
                                 .send()
                                 .await;
@@ -187,12 +183,9 @@ impl GarbageCollector {
             "TrustPolicy GC: scanned: {} roles and {} statements, sweaped: {} statements",
             scanned_roles, scanned_statements, sweaped
         );
-        gauge!("awsiamcontroller_gc_scanned_roles", scanned_roles as f64);
-        gauge!(
-            "awsiamcontroller_gc_scanned_statements",
-            scanned_statements as f64
-        );
-        gauge!("awsiamcontroller_gc_sweaped_statements", sweaped as f64);
+        gauge!("awsiamcontroller_gc_scanned_roles").set(scanned_roles as f64);
+        gauge!("awsiamcontroller_gc_scanned_statements").set(scanned_statements as f64);
+        gauge!("awsiamcontroller_gc_sweaped_statements").set(sweaped as f64);
         Ok(())
     }
 

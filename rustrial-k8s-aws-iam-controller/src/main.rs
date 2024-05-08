@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate log;
+use aws_config::BehaviorVersion;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::{FutureExt, StreamExt};
@@ -112,7 +113,7 @@ async fn get_aws_provider() -> anyhow::Result<SdkConfig> {
         Check the documentation at https://github.com/rustrial/k8s-aws-iam-controller for more information.
     "#};
 
-    let config = aws_config::load_from_env().await;
+    let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
     if let Err(e) = config
         .credentials_provider()
         .clone()

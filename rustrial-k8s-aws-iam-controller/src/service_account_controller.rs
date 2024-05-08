@@ -221,10 +221,8 @@ impl ServiceAccountController {
         };
 
         let duration = Instant::now() - start;
-        histogram!(
-            "reconcile_aws_iam_serviceaccount_duration_ns",
-            duration.as_nanos() as f64
-        );
+        histogram!("reconcile_aws_iam_serviceaccount_duration_ns")
+            .record(duration.as_nanos() as f64);
         result
     }
 
@@ -248,11 +246,11 @@ impl ServiceAccountController {
             .for_each(|res| async move {
                 match res {
                     Ok(o) => {
-                        counter!("reconcile_aws_iam_serviceaccount_success", 1);
+                        counter!("reconcile_aws_iam_serviceaccount_success").increment(1);
                         info!("reconciled {:?}", o)
                     }
                     Err(e) => {
-                        counter!("reconcile_aws_iam_serviceaccount_failure", 1);
+                        counter!("reconcile_aws_iam_serviceaccount_failure").increment(1);
                         warn!("reconcile failed: {}", e)
                     }
                 }
