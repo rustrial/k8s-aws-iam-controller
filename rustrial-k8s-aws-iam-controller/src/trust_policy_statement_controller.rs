@@ -75,7 +75,7 @@ impl IamRoleRef {
             .map(|v| v.role)
         {
             Ok(response) => {
-                let role = response.filter(|r| r.arn().filter(|a| a == &self.arn).is_some());
+                let role = response.filter(|r| r.arn() == &self.arn);
                 if let Some(role) = role {
                     Ok(Some(role))
                 } else {
@@ -122,13 +122,11 @@ impl IamRoleRef {
             let policy_document = serde_json::to_string(&policy_document)?;
             info!(
                 "Update TrustPolicy on IAM Role {}\nOld: {}\nNew: {}",
-                role.arn.as_deref().unwrap_or(""),
-                policy,
-                policy_document
+                role.arn, policy, policy_document
             );
             client
                 .update_assume_role_policy()
-                .set_role_name(role.role_name.clone())
+                .set_role_name(Some(role.role_name.clone()))
                 .policy_document(policy_document)
                 .send()
                 .await?;
@@ -448,7 +446,7 @@ impl TrustPolicyStatementController {
                         {
                             error!(
                                 "Error while removing TrustPolicy Statement of {}/{} from IAM Role {}: {}",
-                                namespace, tp.name_any(), role.arn.as_deref().unwrap_or(""), e
+                                namespace, tp.name_any(), role.arn, e
                             );
                             tp.set_status(Some(format!(
                                 "Failed to remove TrustPolicy Statement from IAM Role: {}",
@@ -513,15 +511,13 @@ impl TrustPolicyStatementController {
         loop {
             let tags = client
                 .list_role_tags()
-                .set_role_name(role.role_name.clone())
+                .set_role_name(Some(role.role_name.clone()))
                 .set_marker(marker)
                 .send()
                 .await?;
             marker = tags.marker;
-            for tag in tags.tags.unwrap_or_default() {
-                if let (Some(key), Some(value)) = (tag.key, tag.value) {
-                    all_tags.insert(key, value);
-                }
+            for tag in tags.tags {
+                all_tags.insert(tag.key, tag.value);
             }
             if marker.is_none() {
                 break;
@@ -602,7 +598,7 @@ impl TrustPolicyStatementController {
                 Self::matches(
                     &p.spec,
                     namespace.as_str(),
-                    role.arn.as_deref().unwrap_or(""),
+                    &role.arn,
                     role.permissions_boundary
                         .as_ref()
                         .map(|v| v.permissions_boundary_arn.clone())
@@ -687,10 +683,8 @@ impl TrustPolicyStatementController {
             })
             .await;
             let duration = Instant::now() - start;
-            histogram!(
-                "reconcile_aws_iam_trustpolicy_duration_ns",
-                duration.as_nanos() as f64
-            );
+            histogram!("reconcile_aws_iam_trustpolicy_duration_ns")
+                .record(duration.as_nanos() as f64);
             match &result {
                 Ok(_) => info!("{} succeeded", log_prefix),
                 Err(e) => error!("{} failed: {}", log_prefix, e),
@@ -789,11 +783,11 @@ impl TrustPolicyStatementController {
             .for_each(|res| async move {
                 match res {
                     Ok(o) => {
-                        counter!("reconcile_aws_iam_trustpolicy_success", 1);
+                        counter!("reconcile_aws_iam_trustpolicy_success").increment(1);
                         info!("reconciled {:?}", o)
                     }
                     Err(e) => {
-                        counter!("reconcile_aws_iam_trustpolicy_failure", 1);
+                        counter!("reconcile_aws_iam_trustpolicy_failure").increment(1);
                         warn!("reconcile failed: {}", e)
                     }
                 }
