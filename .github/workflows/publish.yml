@@ -72,7 +72,7 @@ jobs:
       - name: Extract VERSION from GITHUB_REF
         run: TAG_NAME="${GITHUB_REF#refs/*/}"; echo "VERSION=${TAG_NAME#v}" >> $GITHUB_ENV
       - name: Set up Helm
-        uses: azure/setup-helm@v3.5
+        uses: azure/setup-helm@v4
         with:
           version: "v3.14.4"
       - name: Run chart-testing (lint)
@@ -139,7 +139,7 @@ jobs:
           git config user.name "$GITHUB_ACTOR"
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
       - name: Install Helm
-        uses: azure/setup-helm@v3.5
+        uses: azure/setup-helm@v4
         with:
           version: "v3.14.4"
       - name: Install CR
