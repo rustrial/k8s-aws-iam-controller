@@ -16,6 +16,6 @@ serde_yaml = { workspace = true }
 
 [dev-dependencies]
 k8s-openapi = { workspace = true , features = [
-    "v1_29",
+    "v1_32",
     "schemars",
 ] }
