@@ -24,6 +24,10 @@ kube = { workspace = true, features = [
     "client",
     "rustls-tls",
 ] }
+# TODO: make sure the following rustls version matches the one used by kube, tokio, hyper, ...
+# as we have to call CryptoProvider::install_default() on the appropriate crate version used 
+# by those other crates (see main.rs).
+rustls = { version = "0.23.20", features = ["aws_lc_rs"]}
 json-patch = "3.0.1"
 kube-runtime = "0.98.0"
 schemars = {workspace = true}

@@ -10,6 +10,7 @@ use kube::{Api, Client, Config};
 use kube_runtime::{reflector, reflector::store::Writer, watcher};
 use log::{error, info, warn};
 use metrics_exporter_prometheus::PrometheusBuilder;
+use rustls::crypto;
 use rustrial_k8s_aws_iam_apis::{RoleUsagePolicy, TrustPolicyStatement};
 use std::future::pending;
 
@@ -136,6 +137,16 @@ async fn get_aws_provider() -> anyhow::Result<SdkConfig> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // We must explicitly set the process wide default crypto provider for rustls, see
+    // https://docs.rs/rustls/latest/rustls/crypto/struct.CryptoProvider.html.
+    // Otherwise we will get the following runtime error:
+    // "no process-level CryptoProvider available -- call CryptoProvider::install_default() before this point"
+    //
+    // This is necessary, as several of our dependencies (transitively) depend on rustls with overlapping
+    // crypto provider (ring vs aws-lc-sys) features. If multiple crypto provders are enabled rustls must
+    // be explicitly configured at runtime to tell it what is the default (fallback) crypto provider.
+    let _ = crypto::aws_lc_rs::default_provider().install_default();
+    //
     env_logger::init();
     let config = get_aws_provider().await?;
     let sts_client = aws_sdk_sts::Client::new(&config);
