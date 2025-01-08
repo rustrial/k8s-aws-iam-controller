@@ -2461,6 +2461,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "regex",
+ "rustls 0.23.20",
  "rustrial-k8s-aws-iam-apis",
  "schemars",
  "serde",
