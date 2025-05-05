@@ -408,7 +408,11 @@ impl TrustPolicyStatementController {
                                 tp.name_any(),
                                 e
                             );
-                            vec![]
+                            // Bail out and schedule retry on temporary errors during authorization lookup.
+                            // This will make sure we don't remove existing authorizations on error, which
+                            // would lead to problems as workloads will temporarily not be able to assume 
+                            // the IAM Role until the time based reconciliation would fix it again.
+                            return Ok(RAction::requeue(Duration::from_secs(5)));
                         }
                     };
                     if authorizations.len() > 0 {
