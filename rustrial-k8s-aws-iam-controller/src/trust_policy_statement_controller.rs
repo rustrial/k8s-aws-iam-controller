@@ -1,7 +1,7 @@
 use crate::{
+    Configuration, CrdError,
     arn::ARN,
     iam_policy::{Action, ConditionMap, Conditions, Effect, PolicyDocument, Principal, Statement},
-    Configuration, CrdError,
 };
 use aws_sdk_iam::{operation::get_role::GetRoleError, types::Role};
 use aws_sdk_sts::error::SdkError;
@@ -9,8 +9,8 @@ use aws_types::SdkConfig;
 use futures::{Future, StreamExt};
 use json_patch::diff;
 use kube::{
-    api::{Patch, PatchParams},
     Api, Client, CustomResourceExt, Error, ResourceExt,
+    api::{Patch, PatchParams},
 };
 use kube_runtime::{
     controller::{Action as RAction, Controller},
@@ -23,8 +23,8 @@ use log::{error, info, warn};
 use metrics::{counter, histogram};
 use regex::Regex;
 use rustrial_k8s_aws_iam_apis::{
-    Authorization, Condition, Provider, RoleUsagePolicy, RoleUsagePolicySpec, TrustPolicyStatement,
-    API_GROUP,
+    API_GROUP, Authorization, Condition, Provider, RoleUsagePolicy, RoleUsagePolicySpec,
+    TrustPolicyStatement,
 };
 use std::{collections::HashMap, convert::TryFrom, ops::DerefMut, sync::Arc, time::Instant};
 use tokio::time::Duration;
@@ -410,7 +410,7 @@ impl TrustPolicyStatementController {
                             );
                             // Bail out and schedule retry on temporary errors during authorization lookup.
                             // This will make sure we don't remove existing authorizations on error, which
-                            // would lead to problems as workloads will temporarily not be able to assume 
+                            // would lead to problems as workloads will temporarily not be able to assume
                             // the IAM Role until the time based reconciliation would fix it again.
                             return Ok(RAction::requeue(Duration::from_secs(5)));
                         }
@@ -450,7 +450,10 @@ impl TrustPolicyStatementController {
                         {
                             error!(
                                 "Error while removing TrustPolicy Statement of {}/{} from IAM Role {}: {}",
-                                namespace, tp.name_any(), role.arn, e
+                                namespace,
+                                tp.name_any(),
+                                role.arn,
+                                e
                             );
                             tp.set_status(Some(format!(
                                 "Failed to remove TrustPolicy Statement from IAM Role: {}",

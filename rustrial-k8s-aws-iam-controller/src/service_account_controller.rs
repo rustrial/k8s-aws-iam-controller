@@ -6,8 +6,8 @@ use k8s_openapi::{
     apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference},
 };
 use kube::{
-    api::{DeleteParams, Patch, PatchParams},
     Api, Error, ResourceExt,
+    api::{DeleteParams, Patch, PatchParams},
 };
 use kube_runtime::{
     controller::{Action, Controller},
@@ -17,7 +17,7 @@ use kube_runtime::{
 use log::info;
 use metrics::{counter, histogram};
 use rustrial_k8s_aws_iam_apis::{
-    Provider, TrustPolicyStatement, TrustPolicyStatementSpec, TRUST_POLICY_STATEMENT_LABEL,
+    Provider, TRUST_POLICY_STATEMENT_LABEL, TrustPolicyStatement, TrustPolicyStatementSpec,
 };
 use sha2::Digest;
 use std::{sync::Arc, time::Instant};
