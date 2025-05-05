@@ -6,9 +6,9 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-kube = { version = "0.98.0",  default-features = false, features = ["derive"] }
+kube = { version = "0.99.0",  default-features = false, features = ["derive"] }
 k8s-openapi = { version = "0.24.0", default-features = false }
-serde = { version = "1.0.217", features = ["derive"] }
-serde_json = "1.0.135"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
 serde_yaml = "0.9.33"
-schemars = "0.8.21"
+schemars = "0.8.22"
