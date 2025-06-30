@@ -403,7 +403,7 @@ impl TrustPolicyStatementController {
                         Err(e) => {
                             tp.set_status(Some(format!("{}", e)));
                             error!(
-                                "Error while analysing authorization for {}/{}: {}",
+                                "Error while analysing authorization for {}/{}: {:?}",
                                 namespace,
                                 tp.name_any(),
                                 e
@@ -795,7 +795,7 @@ impl TrustPolicyStatementController {
                     }
                     Err(e) => {
                         counter!("reconcile_aws_iam_trustpolicy_failure").increment(1);
-                        warn!("reconcile failed: {}", e)
+                        warn!("reconcile failed: {:?}", e)
                     }
                 }
             });

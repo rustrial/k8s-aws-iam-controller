@@ -1,5 +1,6 @@
 #[macro_use]
 extern crate log;
+use anyhow::anyhow;
 use aws_config::BehaviorVersion;
 use aws_credential_types::provider::ProvideCredentials;
 use aws_types::SdkConfig;
@@ -90,7 +91,7 @@ async fn get_aws_provider() -> anyhow::Result<SdkConfig> {
         }
 
         Make sure that the IAM Role has a Trust Policy which allows your EKS Cluster to assume that role.
-        Basically, you will have to add a Trust Policy Statment that lools like this, with all the 
+        Basically, you will have to add a Trust Policy Statment that lools like this, with all the
         `${...}` placeholders replaced with your EKS Cluster specific values:
 
             {
@@ -145,7 +146,9 @@ async fn main() -> anyhow::Result<()> {
     // This is necessary, as several of our dependencies (transitively) depend on rustls with overlapping
     // crypto provider (ring vs aws-lc-sys) features. If multiple crypto provders are enabled rustls must
     // be explicitly configured at runtime to tell it what is the default (fallback) crypto provider.
-    let _ = crypto::aws_lc_rs::default_provider().install_default();
+    crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .map_err(|e| anyhow!("failed to set crypto provider: {:?}", e))?;
     //
     env_logger::init();
     let config = get_aws_provider().await?;
@@ -223,10 +226,10 @@ async fn main() -> anyhow::Result<()> {
     } else {
         let hint = indoc! {r#"
             ServiceAccount controller is disabled as OIDC_PROVIDER_ARN environment variable is not set,
-            no TrustPolicyStatement objects will be created for your ServiceAccount objects. This is 
+            no TrustPolicyStatement objects will be created for your ServiceAccount objects. This is
             likely not what you want, and you shold pass the EKS Cluster's AWS OpenID Connect Provider
             ARN via environment variable OIDC_PROVIDER_ARN.
-            
+
             Check the documentation at https://github.com/rustrial/k8s-aws-iam-controller for more information.
         "#};
         warn!("{}", hint);

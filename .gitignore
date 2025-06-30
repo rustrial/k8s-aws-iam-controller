@@ -1,3 +1,4 @@
 .cr-release-packages
 .kube-config
 target
+.DS_Store
