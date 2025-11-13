@@ -1,4 +1,4 @@
-ARG ALPINE_VERSION=3.21.1
+ARG ALPINE_VERSION=3.22.2
 
 FROM alpine:$ALPINE_VERSION as builder
 
@@ -23,7 +23,7 @@ FROM alpine:$ALPINE_VERSION as staging
 # Needed for RUSTFLAGS="-C target-feature=-crt-static" as above
 RUN apk --no-cache add libgcc
 
-# Cross compile arm64/aarch64 binaries created by docker buildx are linked to /lib/ld-linux-aarch64.so.1 
+# Cross compile arm64/aarch64 binaries created by docker buildx are linked to /lib/ld-linux-aarch64.so.1
 # which is called /lib/ld-musl-aarch64.so.1 on alpine.
 RUN ( [[ $(uname -m) == "aarch64" ]] && ln -s /lib/ld-musl-aarch64.so.1 /lib/ld-linux-aarch64.so.1 ) || true
 
