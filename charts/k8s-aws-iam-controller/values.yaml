@@ -14,6 +14,8 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+hostUsers: null
+
 serviceAccount:
   # Specifies whether a service account should be created
   create: true
@@ -33,8 +35,7 @@ trustPolicyStatementGcInterval: "3600"
 
 podAnnotations: {}
 
-podSecurityContext:
-  {}
+podSecurityContext: {}
   # fsGroup: 2000
 
 securityContext:
