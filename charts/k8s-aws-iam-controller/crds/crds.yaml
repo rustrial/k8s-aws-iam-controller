@@ -107,7 +107,10 @@ spec:
                 nullable: true
                 type: array
               providers:
-                description: AWS EKS Cluster's OpenID Connect Providers last applied to IAM Role. This information is used to remove stale providers from IAM Role if the spec.providers field changes.
+                description: |-
+                  AWS EKS Cluster's OpenID Connect Providers last applied to IAM Role.
+                  This information is used to remove stale providers from IAM Role if
+                  the spec.providers field changes.
                 items:
                   properties:
                     providerArn:
@@ -158,10 +161,14 @@ spec:
         description: Auto-generated derived type for RoleUsagePolicySpec via `CustomResource`
         properties:
           spec:
-            description: '`RoleUsagePolicy` objects are managed by Cluster Administrator to authorize namespaces to use (assume) certain AWS IAM Roles. The controller will not add any TrustPolicy Statements to AWS IAM Roles if there is no valid authorization for the corresponding `TrustPolicyStatement` object.'
+            description: |-
+              `RoleUsagePolicy` objects are managed by Cluster Administrator to authorize
+              namespaces to use (assume) certain AWS IAM Roles. The controller will not
+              add any TrustPolicy Statements to AWS IAM Roles if there is no valid
+              authorization for the corresponding `TrustPolicyStatement` object.
             properties:
               namespaces:
-                description: Set of Kubernetes namespaces, which are authorized to use that AWS IAM Role. Can contain `*` to authorize all namespaces.
+                description: "Set of Kubernetes namespaces, which are authorized to use that AWS IAM    \nRole. Can contain `*` to authorize all namespaces."
                 items:
                   type: string
                 type: array
@@ -170,7 +177,13 @@ spec:
                 nullable: true
                 type: string
               roleArn:
-                description: AWS IAM Role ARN of the role for which to grant permission. Either a full ARN, am ARN-PATTERN or the wildcard `*` to match all ARNs. - `arn:aws:iam::000000000000:role/path/role-name` - `arn:aws:iam::*:role/path/role-name` - `arn:aws:iam::*:role/path/*` - `*`
+                description: |-
+                  AWS IAM Role ARN of the role for which to grant permission.
+                  Either a full ARN, am ARN-PATTERN or the wildcard `*` to match all ARNs.
+                  - `arn:aws:iam::000000000000:role/path/role-name`
+                  - `arn:aws:iam::*:role/path/role-name`
+                  - `arn:aws:iam::*:role/path/*`
+                  - `*`
                 type: string
               roleTags:
                 additionalProperties:
