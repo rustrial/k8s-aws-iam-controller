@@ -9,10 +9,10 @@ license = "Unlicense OR MIT OR Apache-2.0"
 [dependencies]
 kube = { workspace = true, features = ["derive"] }
 schemars = { workspace = true }
-k8s-openapi = { workspace = true, features = ["v1_33", "schemars"] }
+k8s-openapi = { workspace = true, features = ["v1_34", "schemars"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 
 [dev-dependencies]
-k8s-openapi = { workspace = true, features = ["v1_33", "schemars"] }
+k8s-openapi = { workspace = true, features = ["v1_34", "schemars"] }
