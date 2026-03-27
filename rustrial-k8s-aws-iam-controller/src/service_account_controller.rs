@@ -23,7 +23,7 @@ use sha2::Digest;
 use std::{sync::Arc, time::Instant};
 use tokio::time::Duration;
 
-const ROLE_ANNOTATION: &'static str = "eks.amazonaws.com/role-arn";
+const ROLE_ANNOTATION: &str = "eks.amazonaws.com/role-arn";
 
 /// Controller which creates `TrustPolicyStatement` objects from `ServiceAccount` objects
 /// that are annotated with an AWS IAM Role.
@@ -124,7 +124,7 @@ impl ServiceAccountController {
             controller: Some(true),
             kind: "ServiceAccount".to_string(),
             name: sa.name_any(),
-            uid: sa.metadata.uid.clone().unwrap_or("".to_string()),
+            uid: sa.metadata.uid.clone().unwrap_or_default(),
         }]);
         tp.spec = spec;
         Ok(tp)
@@ -162,23 +162,17 @@ impl ServiceAccountController {
         object
             .labels
             .as_ref()
-            .map(|v| v.get(name).map(|v| v.as_ref()))
-            .flatten()
+            .and_then(|v| v.get(name).map(|v| v.as_ref()))
     }
 
     fn get_annotation<'a>(object: &'a ObjectMeta, name: &str) -> Option<&'a str> {
         object
             .annotations
             .as_ref()
-            .map(|v| v.get(name).map(|v| v.as_ref()))
-            .flatten()
+            .and_then(|v| v.get(name).map(|v| v.as_ref()))
     }
 
-    fn has_label_or_annotation<'a>(
-        object: &'a ObjectMeta,
-        name: &str,
-        values: Vec<&'static str>,
-    ) -> bool {
+    fn has_label_or_annotation(object: &ObjectMeta, name: &str, values: Vec<&'static str>) -> bool {
         Self::get_label(object, name)
             .filter(|v| values.iter().filter(|x| *x == v).count() > 0)
             .is_some()
@@ -200,7 +194,7 @@ impl ServiceAccountController {
         let result = if !opted_out {
             if sa.metadata.deletion_timestamp.is_some() {
                 // If ServiceAccount has been deleted, delete its TrustPolicyStatement
-                ctx.cleanup(&sa).await.map_err(|e| CrdError::from(e))
+                ctx.cleanup(&sa).await.map_err(CrdError::from)
             } else if let Some(role_arn) = Self::get_iam_role(&sa) {
                 // If a ServiceAccount has a AWS IAM Role annotation, make sure it has a TrustPolicyStatement.
                 debug!(
@@ -211,10 +205,10 @@ impl ServiceAccountController {
                 );
                 ctx.reconcile_annotated_sa(&sa, role_arn.as_str())
                     .await
-                    .map_err(|e| CrdError::from(e))
+                    .map_err(CrdError::from)
             } else {
                 // If ServiceAccount has no AWS IAM Role annotation, delete its TrustPolicyStatement
-                ctx.cleanup(&sa).await.map_err(|e| CrdError::from(e))
+                ctx.cleanup(&sa).await.map_err(CrdError::from)
             }
         } else {
             Ok(Action::requeue(Duration::from_secs(300)))

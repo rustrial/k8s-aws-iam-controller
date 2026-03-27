@@ -36,7 +36,7 @@ impl GarbageCollector {
         let providers = client.list_open_id_connect_providers().send().await?;
         Ok(providers
             .open_id_connect_provider_list
-            .unwrap_or_else(|| vec![])
+            .unwrap_or_default()
             .into_iter()
             .flat_map(|p| p.arn)
             .collect())
@@ -46,7 +46,7 @@ impl GarbageCollector {
         &self,
         client: &aws_sdk_iam::Client,
     ) -> anyhow::Result<(usize, usize, Vec<Candidate>)> {
-        let providers = self.provider_arns(&client).await?;
+        let providers = self.provider_arns(client).await?;
         let mut candidates: Vec<Candidate> = vec![];
         let mut scanned_roles = 0usize;
         let mut scanned_statements = 0usize;
@@ -67,39 +67,32 @@ impl GarbageCollector {
                             let mut stale_providers = vec![];
                             for s in &policy_document.statement {
                                 scanned_statements += 1;
-                                if let Some(p) = &s.principal {
-                                    match p {
-                                        Principal::Principal {
-                                            principal:
-                                                PrincipalKind::Federated(Values::One(provider_arn)),
-                                        } => {
-                                            //
-                                            if let (Some(captures), Some(role_captures)) = (
-                                                PROVIDER_ARN.captures(provider_arn.as_str()),
-                                                crate::trust_policy_statement_controller::ROLE_ARN
-                                                    .captures(&role.arn),
-                                            ) {
-                                                let same_account = captures[1] == role_captures[1];
-                                                if same_account
-                                                    && s.sid.is_some()
-                                                    && providers
-                                                        .iter()
-                                                        .find(|p| {
-                                                            p.as_str() == provider_arn.as_str()
-                                                        })
-                                                        .is_none()
-                                                {
-                                                    stale_providers.push(provider_arn.to_string());
-                                                }
-                                            }
+                                if let Some(Principal::Principal {
+                                    principal: PrincipalKind::Federated(Values::One(provider_arn)),
+                                }) = &s.principal
+                                {
+                                    //
+                                    if let (Some(captures), Some(role_captures)) = (
+                                        PROVIDER_ARN.captures(provider_arn.as_str()),
+                                        crate::trust_policy_statement_controller::ROLE_ARN
+                                            .captures(&role.arn),
+                                    ) {
+                                        let same_account = captures[1] == role_captures[1];
+                                        if same_account
+                                            && s.sid.is_some()
+                                            && providers
+                                                .iter()
+                                                .find(|p| p.as_str() == provider_arn.as_str())
+                                                .is_none()
+                                        {
+                                            stale_providers.push(provider_arn.to_string());
                                         }
-                                        _ => (),
                                     }
                                 }
                             }
                             if !stale_providers.is_empty() {
                                 candidates.push(Candidate {
-                                    role: role,
+                                    role,
                                     stale_providers,
                                     policy: policy_document.clone(),
                                 });
@@ -126,7 +119,7 @@ impl GarbageCollector {
         client: &aws_sdk_iam::Client,
         candidates: Vec<Candidate>,
     ) -> anyhow::Result<usize> {
-        let providers = self.provider_arns(&client).await?;
+        let providers = self.provider_arns(client).await?;
         let mut sweaped = 0usize;
         for mut candidate in candidates {
             // Only retain stale providers, if they are still not in the provider list.
@@ -137,11 +130,13 @@ impl GarbageCollector {
                 let stale = &candidate.stale_providers;
                 let before = candidate.policy.statement.len();
                 candidate.policy.statement.retain(|s| {
-                    //TODO
+                    // Only remove statements that have a Sid (i.e. were created by this
+                    // controller). Statements without a Sid are manually created and must
+                    // be preserved.
                     match &s.principal {
                         Some(Principal::Principal {
                             principal: PrincipalKind::Federated(Values::One(f)),
-                        }) => !stale.contains(f),
+                        }) if s.sid.is_some() => !stale.contains(f),
                         _ => true,
                     }
                 });
@@ -191,8 +186,7 @@ impl GarbageCollector {
 
     pub async fn start(self) {
         let ival: u64 = env_var("TRUST_POLICY_STATEMENT_GC_INTERVAL_SECONDS")
-            .map(|i| i.parse::<u64>().ok())
-            .flatten()
+            .and_then(|i| i.parse::<u64>().ok())
             // Run GC once per hour by default
             .unwrap_or(60 * 60);
         let mut interval = tokio::time::interval(Duration::from_secs(ival));

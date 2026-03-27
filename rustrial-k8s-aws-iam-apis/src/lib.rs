@@ -1,19 +1,18 @@
 use std::collections::HashMap;
 
-use k8s_openapi::chrono::{SecondsFormat, Utc};
+use chrono::{SecondsFormat, Utc};
 use kube::CustomResource;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const API_VERSION: &'static str = "iam.aws.rustrial.org/v1alpha1";
+pub const API_VERSION: &str = "iam.aws.rustrial.org/v1alpha1";
 
-pub const API_GROUP: &'static str = "iam.aws.rustrial.org";
+pub const API_GROUP: &str = "iam.aws.rustrial.org";
 
-pub const VERSION: &'static str = "v1alpha1";
+pub const VERSION: &str = "v1alpha1";
 
-pub const TRUST_POLICY_STATEMENT_LABEL: &'static str =
-    "iam.aws.rustrial.org/trust-policy-statement";
+pub const TRUST_POLICY_STATEMENT_LABEL: &str = "iam.aws.rustrial.org/trust-policy-statement";
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct Condition {
@@ -69,7 +68,7 @@ pub struct RoleUsagePolicySpec {
     #[serde(rename = "roleTags", skip_serializing_if = "Option::is_none")]
     pub role_tags: Option<HashMap<String, String>>,
 
-    /// Set of Kubernetes namespaces, which are authorized to use that AWS IAM    
+    /// Set of Kubernetes namespaces, which are authorized to use that AWS IAM
     /// Role. Can contain `*` to authorize all namespaces.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub namespaces: Vec<String>,
@@ -97,9 +96,9 @@ pub struct Provider {
     status = "TrustPolicyStatementStatus",
     namespaced,
     printcolumn = r#"{
-        "name":"Ready", 
-        "type": "string", 
-        "jsonPath": ".status.conditions[?(@.type==\"Ready\")].status", 
+        "name":"Ready",
+        "type": "string",
+        "jsonPath": ".status.conditions[?(@.type==\"Ready\")].status",
         "description": "Whether TrustPolicyStatement is ready or not. It is considered ready if it has been successfully synced with AWS, which implies that it is authorized as well. "
     }"#
 )]
@@ -126,7 +125,7 @@ pub struct Authorization {
     pub namespace: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema, Default)]
 pub struct TrustPolicyStatementStatus {
     /// AWS EKS Cluster's OpenID Connect Providers last applied to IAM Role.
     /// This information is used to remove stale providers from IAM Role if
@@ -146,71 +145,48 @@ pub struct TrustPolicyStatementStatus {
     pub status: Option<String>,
 }
 
-impl Default for TrustPolicyStatementStatus {
-    fn default() -> Self {
-        Self {
-            providers: None,
-            conditions: None,
-            authorizations: None,
-            status: None,
-        }
-    }
-}
-
 impl TrustPolicyStatement {
     pub fn set_providers(&mut self, providers: Option<Vec<Provider>>) {
-        let mut status = self
-            .status
-            .take()
-            .unwrap_or_else(|| TrustPolicyStatementStatus::default());
+        let mut status = self.status.take().unwrap_or_default();
         status.providers = providers;
         self.status = Some(status);
     }
 
     pub fn set_status(&mut self, text: Option<String>) {
-        let mut status = self
-            .status
-            .take()
-            .unwrap_or_else(|| TrustPolicyStatementStatus::default());
+        let mut status = self.status.take().unwrap_or_default();
         status.status = text;
         self.status = Some(status);
     }
 
     pub fn update_condition(&mut self, c: Condition) {
-        let mut status = self
-            .status
-            .take()
-            .unwrap_or_else(|| TrustPolicyStatementStatus::default());
+        let mut status = self.status.take().unwrap_or_default();
         status.update_condition(c);
         self.status = Some(status);
     }
 
     pub fn set_authorizations(&mut self, authorizations: Option<Vec<Authorization>>) {
-        let mut status = self
-            .status
-            .take()
-            .unwrap_or_else(|| TrustPolicyStatementStatus::default());
+        let mut status = self.status.take().unwrap_or_default();
         status.authorizations = authorizations;
         self.status = Some(status);
     }
 }
 
 impl TrustPolicyStatementStatus {
-    pub fn update_condition(&mut self, mut c: Condition) {
+    pub fn update_condition(&mut self, mut condition: Condition) {
         let time = Utc::now();
-        c.last_transition_time = Some(time.to_rfc3339_opts(SecondsFormat::Secs, true));
-        let mut conditions: Vec<Condition> = self.conditions.take().unwrap_or_else(|| vec![]);
-        if let Some(existing) = conditions.iter().find(|c| c.type_ == c.type_) {
-            if existing.status != c.status
-                || existing.reason != c.reason
-                || existing.message != c.message
-                || existing.observed_generation != c.observed_generation
+        condition.last_transition_time = Some(time.to_rfc3339_opts(SecondsFormat::Secs, true));
+        let mut conditions: Vec<Condition> = self.conditions.take().unwrap_or_default();
+        if let Some(existing) = conditions.iter().find(|c| c.type_ == condition.type_) {
+            if existing.status != condition.status
+                || existing.reason != condition.reason
+                || existing.message != condition.message
+                || existing.observed_generation != condition.observed_generation
             {
-                conditions.retain(|v| v.type_ != c.type_);
-                conditions.push(c);
+                conditions.retain(|v| v.type_ != condition.type_);
+                conditions.push(condition);
             }
         } else {
-            conditions.push(c);
+            conditions.push(condition);
         };
         self.conditions = Some(conditions);
     }

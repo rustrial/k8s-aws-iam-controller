@@ -3,16 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::iter::FromIterator;
 
 /// https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_grammar.html
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Effect {
     Deny,
+    #[default]
     Allow,
-}
-
-impl Default for Effect {
-    fn default() -> Self {
-        Self::Allow
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -174,7 +169,7 @@ impl Principal {
     }
 
     pub fn not_all() -> Principal {
-        Principal::Principal {
+        Principal::NotPrincipal {
             principal: PrincipalKind::All,
         }
     }
@@ -225,6 +220,7 @@ pub enum Action {
 }
 
 impl Action {
+    #[allow(clippy::self_named_constructors)]
     pub fn action<S: ToString>(p: S) -> Action {
         Action::Action {
             action: Values::one(p),
@@ -313,6 +309,7 @@ pub enum Resource {
 }
 
 impl Resource {
+    #[allow(clippy::self_named_constructors)]
     pub fn resource<S: ToString>(p: S) -> Resource {
         Resource::Resource {
             resource: Values::one(p),
@@ -483,7 +480,7 @@ impl Statement {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct PolicyDocument {
     #[serde(rename = "Id", skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -498,17 +495,6 @@ pub struct PolicyDocument {
     /// attributes into a Map.
     #[serde(flatten)]
     pub extra_attributes: IndexMap<String, serde_json::Value>,
-}
-
-impl Default for PolicyDocument {
-    fn default() -> Self {
-        Self {
-            id: Default::default(),
-            version: None,
-            statement: Default::default(),
-            extra_attributes: Default::default(),
-        }
-    }
 }
 
 impl PolicyDocument {

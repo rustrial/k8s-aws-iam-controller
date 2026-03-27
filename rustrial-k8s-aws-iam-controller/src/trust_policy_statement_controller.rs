@@ -1,6 +1,6 @@
 use crate::{
     Configuration, CrdError,
-    arn::ARN,
+    arn::Arn,
     iam_policy::{Action, ConditionMap, Conditions, Effect, PolicyDocument, Principal, Statement},
 };
 use aws_sdk_iam::{operation::get_role::GetRoleError, types::Role};
@@ -29,9 +29,9 @@ use rustrial_k8s_aws_iam_apis::{
 use std::{collections::HashMap, convert::TryFrom, ops::DerefMut, sync::Arc, time::Instant};
 use tokio::time::Duration;
 
-const FINALIZER: &'static str = API_GROUP;
+const FINALIZER: &str = API_GROUP;
 
-const EMPTY_ASSUME_ROLE_POLICY: &'static str = r#"{"Version": "2008-10-17","Statement": []}"#;
+const EMPTY_ASSUME_ROLE_POLICY: &str = r#"{"Version": "2008-10-17","Statement": []}"#;
 
 lazy_static! {
     pub(crate) static ref ROLE_ARN: Regex =
@@ -75,7 +75,7 @@ impl IamRoleRef {
             .map(|v| v.role)
         {
             Ok(response) => {
-                let role = response.filter(|r| r.arn() == &self.arn);
+                let role = response.filter(|r| r.arn() == self.arn);
                 if let Some(role) = role {
                     Ok(Some(role))
                 } else {
@@ -140,12 +140,9 @@ impl IamRoleRef {
             .principal
             .as_deref()
             .map(|p| p.clone().into_iter().collect())
-            .unwrap_or_else(|| vec![]);
-        let same_provider = principals.len() == 1
-            && principals
-                .iter()
-                .find(|p| *p == &provider.provider_arn)
-                .is_some();
+            .unwrap_or_default();
+        let same_provider =
+            principals.len() == 1 && principals.iter().any(|p| p == &provider.provider_arn);
         same_sid && same_provider
     }
 
@@ -153,22 +150,27 @@ impl IamRoleRef {
         let mut stale_providers = tp
             .status
             .as_ref()
-            .map(|s| s.providers.clone())
-            .flatten()
-            .unwrap_or_else(|| vec![]);
+            .and_then(|s| s.providers.clone())
+            .unwrap_or_default();
         stale_providers.retain(|p| {
-            tp.spec
+            !tp.spec
                 .providers
                 .iter()
-                .find(|n| n.statement_sid == p.statement_sid && n.provider_arn == p.provider_arn)
-                .is_none()
+                .any(|n| n.statement_sid == p.statement_sid && n.provider_arn == p.provider_arn)
         });
-        statements.retain(|v| {
-            stale_providers
-                .iter()
-                .find(|p| Self::match_statement(v, p))
-                .is_none()
-        });
+        statements.retain(|v| !stale_providers.iter().any(|p| Self::match_statement(v, p)));
+    }
+
+    fn extract_provider_id(arn: &str) -> anyhow::Result<&str> {
+        let mut parts = arn.split(":oidc-provider/").skip(1);
+        let provider_id = parts.next();
+        if let Some(provider_id) = provider_id
+            && parts.next().is_none()
+        {
+            Ok(provider_id)
+        } else {
+            Err(anyhow::format_err!("Invalid provider ARN {}", arn))
+        }
     }
 
     pub async fn add_trust_policy_statement(
@@ -182,10 +184,7 @@ impl IamRoleRef {
             Self::remove_stale_providers(tp, statements);
             for provider in &tp.spec.providers {
                 let arn: &str = provider.provider_arn.as_str();
-                let provider_id = arn
-                    .split(":oidc-provider/")
-                    .last()
-                    .ok_or_else(|| anyhow::format_err!("Invalid provider ARN {}", arn))?;
+                let provider_id = Self::extract_provider_id(arn)?;
                 statements.retain(|v| v.sid.as_deref() != Some(provider.statement_sid.as_str()));
                 let mut conditions = Conditions::new();
                 let mut string_equals = ConditionMap::new();
@@ -203,7 +202,7 @@ impl IamRoleRef {
                     sid: Some(provider.statement_sid.clone()),
                     effect: Effect::Allow,
                     action: Action::action("sts:AssumeRoleWithWebIdentity"),
-                    principal: Some(Principal::federated(&[arn])),
+                    principal: Some(Principal::federated([arn])),
                     condition: Some(conditions),
                     ..Default::default()
                 };
@@ -230,9 +229,9 @@ impl IamRoleRef {
                 // Remove all statements for stale providers, which are no longer in the spec.
                 Self::remove_stale_providers(tp, statements);
                 statements.retain(|v| {
-                    sids.iter()
-                        .find(|sid| Some(sid.as_str()) == v.sid.as_deref())
-                        .is_none()
+                    !sids
+                        .iter()
+                        .any(|sid| Some(sid.as_str()) == v.sid.as_deref())
                 });
                 Ok(())
             })
@@ -276,7 +275,7 @@ impl ReconcileEvent {
     }
 
     pub fn namespace(&self) -> String {
-        self.original.namespace().unwrap_or_else(|| "".to_string())
+        self.original.namespace().unwrap_or_default()
     }
 
     pub fn api(&self, client: Client) -> Api<TrustPolicyStatement> {
@@ -288,7 +287,7 @@ impl ReconcileEvent {
     }
 
     pub async fn update(&mut self, client: Client) -> kube::Result<()> {
-        let namespace = self.original.namespace().unwrap_or("".to_string());
+        let namespace = self.original.namespace().unwrap_or_default();
         // capture copy of modified for status diff.
         let modified = self.modified.clone();
         let spec_patch = {
@@ -297,8 +296,8 @@ impl ReconcileEvent {
             ospec.status = None;
             mspec.status = None;
             let patch = diff(
-                &serde_json::to_value(&ospec).map_err(|e| Error::SerdeError(e))?,
-                &serde_json::to_value(&mspec).map_err(|e| Error::SerdeError(e))?,
+                &serde_json::to_value(&ospec).map_err(Error::SerdeError)?,
+                &serde_json::to_value(&mspec).map_err(Error::SerdeError)?,
             );
             if patch.0.is_empty() {
                 None
@@ -339,16 +338,15 @@ impl ReconcileEvent {
         }
         let status_patch = {
             let patch = diff(
-                &serde_json::to_value(&self.original.status).map_err(|e| Error::SerdeError(e))?,
-                &serde_json::to_value(&modified.status).map_err(|e| Error::SerdeError(e))?,
+                &serde_json::to_value(&self.original.status).map_err(Error::SerdeError)?,
+                &serde_json::to_value(&modified.status).map_err(Error::SerdeError)?,
             );
             if patch.0.is_empty() {
                 None
             } else {
                 Some(diff(
-                    &serde_json::to_value(self.original.as_ref())
-                        .map_err(|e| Error::SerdeError(e))?,
-                    &serde_json::to_value(&modified).map_err(|e| Error::SerdeError(e))?,
+                    &serde_json::to_value(self.original.as_ref()).map_err(Error::SerdeError)?,
+                    &serde_json::to_value(&modified).map_err(Error::SerdeError)?,
                 ))
             }
         };
@@ -394,7 +392,7 @@ impl TrustPolicyStatementController {
         let mut tp = ReconcileEvent::new(tp);
         let namespace = tp.namespace();
         tp.set_status(None);
-        let generation = tp.metadata.generation.clone();
+        let generation = tp.metadata.generation;
         match IamRoleRef::try_from(tp.spec.role_arn.as_str()) {
             Ok(role_ref) => match role_ref.resolve(&self.provider).await {
                 Ok(Some(role)) => {
@@ -415,7 +413,7 @@ impl TrustPolicyStatementController {
                             return Ok(RAction::requeue(Duration::from_secs(5)));
                         }
                     };
-                    if authorizations.len() > 0 {
+                    if !authorizations.is_empty() {
                         tp.set_authorizations(Some(authorizations));
                         match role_ref
                             .add_trust_policy_statement(&self.provider, &tp, &role)
@@ -426,7 +424,7 @@ impl TrustPolicyStatementController {
                                 tp.set_providers(Some(providers));
                                 tp.update_condition(Condition {
                                     type_: "Ready".to_string(),
-                                    message: format!(""),
+                                    message: String::new(),
                                     reason: "Success".to_string(),
                                     status: "True".to_string(),
                                     observed_generation: generation,
@@ -534,8 +532,8 @@ impl TrustPolicyStatementController {
     }
 
     pub(crate) fn arn_like(pattern: &str, arn: &str) -> bool {
-        let pa = ARN::try_from(pattern);
-        let a = ARN::try_from(arn);
+        let pa = Arn::try_from(pattern);
+        let a = Arn::try_from(arn);
         if let (Ok(arn_pattern), Ok(arn)) = (pa, a) {
             arn_pattern.matches(&arn)
         } else {
@@ -565,18 +563,16 @@ impl TrustPolicyStatementController {
         let ns = policy
             .namespaces
             .iter()
-            .filter(|ns| ns.as_str() == "*" || ns.as_str() == namespace)
-            .count()
-            > 0;
+            .any(|ns| ns.as_str() == "*" || ns.as_str() == namespace);
         if ns {
             let role_arn_matches = Self::arn_like(policy.role_arn.as_str(), role_arn);
             let tags_match = match policy.role_tags.as_ref().filter(|v| !v.is_empty()) {
-                Some(required_tags) => Self::tags_match(required_tags, &available_tags),
+                Some(required_tags) => Self::tags_match(required_tags, available_tags),
                 // if no tags are provided, they match
                 None => true,
             };
             let permission_boundary_matches = match (
-                &policy.permission_boundary.as_deref(),
+                policy.permission_boundary.as_deref(),
                 permission_boundary.as_deref(),
             ) {
                 (Some(pattern), Some(arn)) if !pattern.is_empty() => Self::arn_like(pattern, arn),
@@ -596,7 +592,7 @@ impl TrustPolicyStatementController {
         tp: &TrustPolicyStatement,
         role: &Role,
     ) -> anyhow::Result<Vec<Authorization>> {
-        let namespace = tp.namespace().unwrap_or_else(|| "".to_string());
+        let namespace = tp.namespace().unwrap_or_default();
         let cache = self.useage_policy_cache.state();
         let available_tags = self.get_role_tags(role).await?;
         let authorizations = cache
@@ -608,8 +604,7 @@ impl TrustPolicyStatementController {
                     &role.arn,
                     role.permissions_boundary
                         .as_ref()
-                        .map(|v| v.permissions_boundary_arn.clone())
-                        .flatten(),
+                        .and_then(|v| v.permissions_boundary_arn.clone()),
                     &available_tags,
                 )
             })
@@ -624,15 +619,12 @@ impl TrustPolicyStatementController {
 
     async fn remove_statement(&self, tp: &TrustPolicyStatement) -> anyhow::Result<()> {
         let role_ref = IamRoleRef::try_from(tp.spec.role_arn.as_str());
-        match role_ref {
-            // If ARN is syntactically valid, remove trust policy from Role.
-            Ok(role_ref) => {
-                role_ref
-                    .remove_trust_policy_statement(&self.provider, tp)
-                    .await?
-            }
-            // If ARN is syntactically invalid, we do not need to remove anything.
-            Err(_) => (),
+        // If ARN is syntactically valid, remove trust policy from Role.
+        // If ARN is syntactically invalid, we do not need to remove anything.
+        if let Ok(role_ref) = role_ref {
+            role_ref
+                .remove_trust_policy_statement(&self.provider, tp)
+                .await?
         }
         Ok(())
     }
@@ -641,7 +633,7 @@ impl TrustPolicyStatementController {
         let role_arn = tp.spec.role_arn.clone();
         let object_id = format!(
             "TrustPolicyStatement {}/{}",
-            tp.namespace().unwrap_or_else(|| "".to_string()),
+            tp.namespace().unwrap_or_default(),
             tp.name_any(),
         );
         let role_and_object_id = format!("AWS IAM Role {} for {}", role_arn, object_id,);
@@ -678,7 +670,7 @@ impl TrustPolicyStatementController {
     ) -> Result<RAction, finalizer::Error<CrdError>> {
         let log_prefix = format!(
             "reconciliation of TrustPolicyStatement {}/{} with AWS IAM Role ARN {}",
-            tp.namespace().unwrap_or_else(|| "".to_string()),
+            tp.namespace().unwrap_or_default(),
             tp.name_any(),
             tp.spec.role_arn,
         );
@@ -708,13 +700,10 @@ impl TrustPolicyStatementController {
         ctx: Arc<Self>,
     ) -> Result<RAction, CrdError> {
         match event {
-            Event::Apply(tp) => ctx
-                .reconcile_trust_policy(tp)
-                .await
-                .map_err(|e| CrdError::from(e)),
+            Event::Apply(tp) => ctx.reconcile_trust_policy(tp).await.map_err(CrdError::from),
             Event::Cleanup(tp) => {
                 // If TrustPolicyStatement has been deleted, remove trust policy statement from AWS IAM Role.
-                ctx.cleanup(tp).await.map_err(|e| CrdError::from(e))
+                ctx.cleanup(tp).await.map_err(CrdError::from)
             }
         }
     }
@@ -733,20 +722,15 @@ impl TrustPolicyStatementController {
             .spec
             .namespaces
             .iter()
-            .filter(|ns| ns.as_str() == "*" || Some(ns.as_str()) == tp.namespace().as_deref())
-            .count()
-            > 0;
+            .any(|ns| ns.as_str() == "*" || Some(ns.as_str()) == tp.namespace().as_deref());
         let matches = ns && Self::arn_like(p.spec.role_arn.as_str(), tp.spec.role_arn.as_str());
         if let Some(status) = &tp.status {
             if let Some(authorizations) = &status.authorizations {
-                let currently_authorized_by = authorizations
-                    .iter()
-                    .find(|a: &&Authorization| {
-                        a.kind == "RoleUsagePolicy"
-                            && a.namespace == p.namespace()
-                            && a.name == p.name_any()
-                    })
-                    .is_some();
+                let currently_authorized_by = authorizations.iter().any(|a: &Authorization| {
+                    a.kind == "RoleUsagePolicy"
+                        && a.namespace == p.namespace()
+                        && a.name == p.name_any()
+                });
                 matches || currently_authorized_by
             } else {
                 matches
@@ -780,7 +764,7 @@ impl TrustPolicyStatementController {
         );
         let cache = controller.store();
         let mapper = move |policy: RoleUsagePolicy| Self::mapper_impl(policy, &cache);
-        let controller = controller
+        controller
             .watches(
                 self.configuration.role_usage_policy.clone(),
                 Config::default(),
@@ -798,8 +782,7 @@ impl TrustPolicyStatementController {
                         warn!("reconcile failed: {:?}", e)
                     }
                 }
-            });
-        controller
+            })
     }
 }
 

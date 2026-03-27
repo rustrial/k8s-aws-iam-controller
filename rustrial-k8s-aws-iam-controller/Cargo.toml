@@ -9,15 +9,15 @@ license = "Unlicense OR MIT OR Apache-2.0"
 
 
 [dependencies]
-log = "0.4.28"
-env_logger = "0.11.8"
-anyhow = { version = "1.0.100", features = ["std"] }
-thiserror = "2.0.17"
-tokio = { version = "1.48.0", features = ["full"] }
-serde_yaml = { workspace = true }
-futures = "0.3.31"
-metrics = "0.24.2"
-metrics-exporter-prometheus = "0.17.2"
+log = "^0.4"
+env_logger = "^0.11"
+anyhow = { version = "^1.0.0", features = ["std"] }
+thiserror = "^2.0.0"
+tokio = { version = "^1.48.0", features = ["full"] }
+
+futures = "^0.3.31"
+metrics = "^0.24.2"
+metrics-exporter-prometheus = "^0.17.2"
 kube = { workspace = true, features = [
     "derive",
     "jsonpatch",
@@ -27,22 +27,22 @@ kube = { workspace = true, features = [
 # TODO: make sure the following rustls version matches the one used by kube, tokio, hyper, ...
 # as we have to call CryptoProvider::install_default() on the appropriate crate version used
 # by those other crates (see main.rs).
-rustls = { version = "0.23.35", features = ["aws_lc_rs"] }
-json-patch = "4.1.0"
-kube-runtime = "2.0.1"
+rustls = { version = "0.23.37", features = ["aws_lc_rs"] }
+json-patch = "^4.1.0"
+kube-runtime = "^3.1.0"
 schemars = { workspace = true }
-k8s-openapi = { workspace = true, features = ["v1_34", "schemars"] }
+k8s-openapi = { workspace = true, features = ["v1_35", "schemars"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 rustrial-k8s-aws-iam-apis = { path = "../rustrial-k8s-aws-iam-apis" }
-sha2 = "0.10.9"
-regex = "1.12.2"
-lazy_static = "1.5.0"
-indoc = "2.0.7"
-indexmap = { version = "2.12.0", features = ["serde"] }
-aws-types = "1.3.10"
-aws-credential-types = "1.2.9"
-aws-config = "1.8.10"
-aws-sdk-iam = "1.96.0"
-aws-sdk-sts = "1.92.0"
-urlencoding = "2.1.3"
+sha2 = "^0.10.9"
+regex = "^1.12.2"
+lazy_static = "^1.5.0"
+indoc = "^2.0.7"
+indexmap = { version = "^2.12.0", features = ["serde"] }
+aws-types = "1.3.14"
+aws-credential-types = "1.2.14"
+aws-config = "1.8.15"
+aws-sdk-iam = "1.107.0"
+aws-sdk-sts = "1.101.0"
+urlencoding = "^2.1.3"

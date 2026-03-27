@@ -7,12 +7,13 @@ license = "Unlicense OR MIT OR Apache-2.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+chrono = { workspace = true, features = ["clock"] }
 kube = { workspace = true, features = ["derive"] }
 schemars = { workspace = true }
-k8s-openapi = { workspace = true, features = ["v1_34", "schemars"] }
+k8s-openapi = { workspace = true, features = ["v1_35", "schemars"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 
 [dev-dependencies]
-k8s-openapi = { workspace = true, features = ["v1_34", "schemars"] }
+k8s-openapi = { workspace = true, features = ["v1_35", "schemars"] }

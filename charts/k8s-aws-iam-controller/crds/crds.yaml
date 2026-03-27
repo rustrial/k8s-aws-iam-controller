@@ -168,7 +168,9 @@ spec:
               authorization for the corresponding `TrustPolicyStatement` object.
             properties:
               namespaces:
-                description: "Set of Kubernetes namespaces, which are authorized to use that AWS IAM    \nRole. Can contain `*` to authorize all namespaces."
+                description: |-
+                  Set of Kubernetes namespaces, which are authorized to use that AWS IAM
+                  Role. Can contain `*` to authorize all namespaces.
                 items:
                   type: string
                 type: array

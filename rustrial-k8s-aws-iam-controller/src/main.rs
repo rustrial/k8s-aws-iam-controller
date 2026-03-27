@@ -14,6 +14,7 @@ use metrics_exporter_prometheus::PrometheusBuilder;
 use rustls::crypto;
 use rustrial_k8s_aws_iam_apis::{RoleUsagePolicy, TrustPolicyStatement};
 use std::future::pending;
+use tokio::signal::unix::{SignalKind, signal};
 
 mod arn;
 mod gc;
@@ -176,8 +177,7 @@ async fn main() -> anyhow::Result<()> {
             Api::<TrustPolicyStatement>::all(client.clone()),
         )
     };
-    let storage_namespace =
-        env_var("STORAGE_NAMESPACE").unwrap_or_else(|| client_config.default_namespace);
+    let storage_namespace = env_var("STORAGE_NAMESPACE").unwrap_or(client_config.default_namespace);
     info!(
         "Controller is using {} as storage namesapce for RoleUsagePolicy objects",
         storage_namespace
@@ -235,22 +235,75 @@ async fn main() -> anyhow::Result<()> {
         warn!("{}", hint);
         (None, pending().boxed())
     };
-
+    // Spawn the RoleUsagePolicy reflector so it starts populating the cache immediately.
+    // Important: the reflector must be progressing while we wait for the useage_policy_store
+    // to become ready (see below), so ordering matters.
+    let reflector_handle = tokio::spawn(useage_policy_reflector_loop);
+    // Wait for the reflector cache to be populated before starting controllers.
+    // Without this, the TrustPolicyStatement controller could reconcile against an empty
+    // RoleUsagePolicy cache and incorrectly revoke valid trust policy statements on startup.
+    info!("Waiting for RoleUsagePolicy reflector cache to be ready...");
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        useage_policy_store.wait_until_ready(),
+    )
+    .await
+    {
+        Ok(Ok(())) => info!("RoleUsagePolicy reflector cache is ready"),
+        Ok(Err(e)) => {
+            return Err(anyhow!(
+                "RoleUsagePolicy reflector writer was dropped before cache became ready: {}",
+                e
+            ));
+        }
+        Err(_) => {
+            return Err(anyhow!(
+                "Timed out waiting for RoleUsagePolicy reflector cache to become ready"
+            ));
+        }
+    }
     let tust_policy_statement_controller = TrustPolicyStatementController {
         provider: config.clone(),
         configuration: configuration.clone(),
         useage_policy_cache: useage_policy_store.clone(),
     };
-
     let garbage_collector = GarbageCollector::new(config);
-
-    let schedule = tokio::spawn(garbage_collector.start());
-
-    tokio::select! {
-       _ = service_account_controller => (),
-       _ = tust_policy_statement_controller.start() => (),
-       _ = useage_policy_reflector_loop => (),
-       _ = schedule => (),
+    let gc_handle = tokio::spawn(garbage_collector.start());
+    // Set up signal handlers for graceful shutdown.
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+    let mut sigint = signal(SignalKind::interrupt()).expect("failed to install SIGINT handler");
+    let graceful = tokio::select! {
+        _ = sigterm.recv() => {
+            info!("Received SIGTERM, shutting down gracefully...");
+            true
+        },
+        _ = sigint.recv() => {
+            info!("Received SIGINT (Ctrl-C), shutting down gracefully...");
+            true
+        },
+        _ = service_account_controller => {
+            error!("ServiceAccount controller exited unexpectedly");
+            false
+        },
+        _ = tust_policy_statement_controller.start() => {
+            error!("TrustPolicyStatement controller exited unexpectedly");
+            false
+        },
+        result = reflector_handle => {
+            error!("RoleUsagePolicy reflector exited unexpectedly: {:?}", result);
+            false
+        },
+        result = gc_handle => {
+            error!("Garbage collector exited unexpectedly: {:?}", result);
+            false
+        },
     };
-    Ok(())
+    if graceful {
+        info!("Shutdown complete.");
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "Controller exited: one or more components terminated unexpectedly"
+        ))
+    }
 }

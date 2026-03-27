@@ -1,6 +1,6 @@
-ARG ALPINE_VERSION=3.22.2
+ARG ALPINE_VERSION=3.23
 
-FROM alpine:$ALPINE_VERSION as builder
+FROM alpine:$ALPINE_VERSION AS builder
 
 RUN apk --no-cache add ca-certificates libgcc gcc pkgconfig openssl-dev build-base curl
 
@@ -18,7 +18,7 @@ ENV RUSTFLAGS="-C target-feature=-crt-static"
 
 RUN cargo build --release -vvv
 
-FROM alpine:$ALPINE_VERSION as staging
+FROM alpine:$ALPINE_VERSION AS staging
 
 # Needed for RUSTFLAGS="-C target-feature=-crt-static" as above
 RUN apk --no-cache add libgcc
