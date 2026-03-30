@@ -187,7 +187,10 @@ async fn main() -> anyhow::Result<()> {
         Api::<RoleUsagePolicy>::namespaced(client.clone(), storage_namespace.as_str());
     // Create RoleUsagePolicy Index (store & reflector)
     let (useage_policy_reflector_loop, useage_policy_store) = {
-        let useage_policy_watcher = watcher(role_usage_policy.clone(), watcher::Config::default());
+        let useage_policy_watcher = watcher(
+            role_usage_policy.clone(),
+            watcher::Config::default().streaming_lists(),
+        );
         let useage_policy_writer = Writer::<RoleUsagePolicy>::default();
         let useage_policy_store = useage_policy_writer.as_reader();
         let useage_policy_reflector = reflector(useage_policy_writer, useage_policy_watcher);

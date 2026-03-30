@@ -760,14 +760,14 @@ impl TrustPolicyStatementController {
     pub fn start(self) -> impl Future<Output = ()> {
         let controller = Controller::new(
             self.configuration.trust_policy_statment.clone(),
-            Config::default(),
+            Config::default().streaming_lists(),
         );
         let cache = controller.store();
         let mapper = move |policy: RoleUsagePolicy| Self::mapper_impl(policy, &cache);
         controller
             .watches(
                 self.configuration.role_usage_policy.clone(),
-                Config::default(),
+                Config::default().streaming_lists(),
                 mapper,
             )
             .run(Self::reconcile, Self::error_policy, Arc::new(self))

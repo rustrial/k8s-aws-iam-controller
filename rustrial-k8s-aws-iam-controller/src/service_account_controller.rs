@@ -228,13 +228,13 @@ impl ServiceAccountController {
     pub fn start(self) -> (Store<ServiceAccount>, impl Future<Output = ()>) {
         let controller = Controller::new(
             self.configuration.service_account.clone(),
-            Config::default(),
+            Config::default().streaming_lists(),
         );
         let store = controller.store();
         let service_account_controller = controller
             .owns(
                 self.configuration.trust_policy_statment.clone(),
-                Config::default(),
+                Config::default().streaming_lists(),
             )
             .run(Self::reconcile, Self::error_policy, Arc::new(self))
             .for_each(|res| async move {
