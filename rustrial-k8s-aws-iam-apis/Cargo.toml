@@ -10,10 +10,10 @@ license = "Unlicense OR MIT OR Apache-2.0"
 chrono = { workspace = true, features = ["clock"] }
 kube = { workspace = true, features = ["derive"] }
 schemars = { workspace = true }
-k8s-openapi = { workspace = true, features = ["v1_35", "schemars"] }
+k8s-openapi = { workspace = true, features = ["v1_36", "schemars"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serde_yaml_ng = { workspace = true }
+serde-saphyr = { workspace = true }
 
 [dev-dependencies]
-k8s-openapi = { workspace = true, features = ["v1_35", "schemars"] }
+k8s-openapi = { workspace = true, features = ["v1_36", "schemars"] }

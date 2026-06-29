@@ -14,7 +14,9 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: 'Whether TrustPolicyStatement is ready or not. It is considered ready if it has been successfully synced with AWS, which implies that it is authorized as well. '
+    - description: >-
+        Whether TrustPolicyStatement is ready or not. It is considered ready if it has
+        been successfully synced with AWS, which implies that it is authorized as well. 
       jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -55,7 +57,9 @@ spec:
             nullable: true
             properties:
               authorizations:
-                description: The authorization sources which authorize the use of this trust policy statement.
+                description: >-
+                  The authorization sources which authorize the use of this trust policy
+                  statement.
                 items:
                   properties:
                     kind:
@@ -78,19 +82,32 @@ spec:
                 items:
                   properties:
                     lastTransitionTime:
-                      description: lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      description: >-
+                        lastTransitionTime is the last time the condition transitioned from one status
+                        to another. This should be when the underlying condition changed.  If that is not
+                        known, then using the time when the API field changed is acceptable.
                       nullable: true
                       type: string
                     message:
-                      description: message is a human readable message indicating details about the transition. This may be an empty string.
+                      description: >-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
                       type: string
                     observedGeneration:
-                      description: observedGeneration represents the .metadata.generation that the condition was set based upon. For instance, if .metadata.generation is currently 12, but the .status.conditions\[x\].observedGeneration is 9, the condition is out of date with respect to the current state of the instance.
+                      description: >-
+                        observedGeneration represents the .metadata.generation that the condition was
+                        set based upon. For instance, if .metadata.generation is currently 12, but the
+                        .status.conditions\[x\].observedGeneration is 9, the condition is out of date with
+                        respect to the current state of the instance.
                       format: int64
                       nullable: true
                       type: integer
                     reason:
-                      description: reason contains a programmatic identifier indicating the reason for the condition's last transition. Producers of specific condition types may define expected values and meanings for this field, and whether the values are considered a guaranteed API. The value should be a CamelCase string. This field may not be empty.
+                      description: >-
+                        reason contains a programmatic identifier indicating the reason for the
+                        condition's last transition. Producers of specific condition types may define expected
+                        values and meanings for this field, and whether the values are considered a
+                        guaranteed API. The value should be a CamelCase string. This field may not be empty.
                       type: string
                     status:
                       description: status of the condition, one of True, False, Unknown.
