@@ -18,7 +18,7 @@ use kube_runtime::{
     reflector::{ObjectRef, Store},
     watcher::Config,
 };
-use lazy_static::lazy_static;
+
 use log::{error, info, warn};
 use metrics::{counter, histogram};
 use regex::Regex;
@@ -26,17 +26,21 @@ use rustrial_k8s_aws_iam_apis::{
     API_GROUP, Authorization, Condition, Provider, RoleUsagePolicy, RoleUsagePolicySpec,
     TrustPolicyStatement,
 };
-use std::{collections::HashMap, convert::TryFrom, ops::DerefMut, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    convert::TryFrom,
+    ops::DerefMut,
+    sync::{Arc, LazyLock},
+    time::Instant,
+};
 use tokio::time::Duration;
 
 const FINALIZER: &str = API_GROUP;
 
 const EMPTY_ASSUME_ROLE_POLICY: &str = r#"{"Version": "2008-10-17","Statement": []}"#;
 
-lazy_static! {
-    pub(crate) static ref ROLE_ARN: Regex =
-        Regex::new(r#"^arn:[^:]+:iam::(\d+):role/((?:[^/]+/)*([^/]+))$"#).unwrap();
-}
+pub(crate) static ROLE_ARN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"^arn:[^:]+:iam::(\d+):role/((?:[^/]+/)*([^/]+))$"#).unwrap());
 
 struct IamRoleRef {
     name: String,
