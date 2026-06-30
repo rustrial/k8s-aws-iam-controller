@@ -4,18 +4,17 @@ use crate::{
 };
 use aws_sdk_iam::types::Role;
 use aws_types::SdkConfig;
-use lazy_static::lazy_static;
+
 use log::warn;
 use metrics::gauge;
 use regex::Regex;
+use std::sync::LazyLock;
 use std::time::Duration;
 
-lazy_static! {
-    static ref PROVIDER_ARN: Regex = Regex::new(
-        r#"^arn:[^:]+:iam::(\d+):oidc-provider/(oidc\.eks\.[^.]+\.amazonaws\.com/id/.*)$"#
-    )
-    .unwrap();
-}
+static PROVIDER_ARN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"^arn:[^:]+:iam::(\d+):oidc-provider/(oidc\.eks\.[^.]+\.amazonaws\.com/id/.*)$"#)
+        .unwrap()
+});
 
 pub struct GarbageCollector {
     pub provider: SdkConfig,

@@ -93,7 +93,8 @@ impl ServiceAccountController {
             digester.update(sa.name_any().as_bytes());
             let digest = digester.finalize();
             // Make sure SID starts and ends with non-numeric characters.
-            let statement_sid = format!("EKS{:x}X", digest);
+            let hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+            let statement_sid = format!("EKS{}X", hex);
             providers.push(Provider {
                 provider_arn: provider_arn.clone(),
                 statement_sid,
